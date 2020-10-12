@@ -811,7 +811,11 @@ void SPATIALGDKSERVICES_API FLocalDeploymentManager::TakeSnapshot(UWorld* World,
 																  FSpatialSnapshotTakenFunc OnSnapshotTaken)
 {
 	FHttpModule& HttpModule = FModuleManager::LoadModuleChecked<FHttpModule>("HTTP");
+#if ENGINE_MINOR_VERSION > 25
+	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> HttpRequest = HttpModule.Get().CreateRequest();
+#else
 	TSharedRef<IHttpRequest> HttpRequest = HttpModule.Get().CreateRequest();
+#endif
 
 	HttpRequest->OnProcessRequestComplete().BindLambda(
 		[World, bUseStandardRuntime, OnSnapshotTaken](FHttpRequestPtr HttpRequest, FHttpResponsePtr HttpResponse, bool bSucceeded) {
