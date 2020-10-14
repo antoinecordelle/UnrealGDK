@@ -90,7 +90,6 @@ USpatialGDKSettings::USpatialGDKSettings(const FObjectInitializer& ObjectInitial
 	, EntityCreationRateLimit(0)
 	, bUseIsActorRelevantForConnection(false)
 	, OpsUpdateRate(1000.0f)
-	, bEnableHandover(false)
 	, MaxNetCullDistanceSquared(0.0f) // Default disabled
 	, QueuedIncomingRPCWaitTime(1.0f)
 	, QueuedIncomingRPCRetryTime(1.0f)
@@ -106,7 +105,9 @@ USpatialGDKSettings::USpatialGDKSettings(const FObjectInitializer& ObjectInitial
 	, bBatchSpatialPositionUpdates(false)
 	, MaxDynamicallyAttachedSubobjectsPerClass(3)
 	, ServicesRegion(EServicesRegion::Default)
-	, WorkerLogLevel(ESettingsWorkerLogVerbosity::Warning)
+	, WorkerLogLevel(ESettingsWorkerLogVerbosity::Warning) // Deprecated - UNR-4348
+	, LocalWorkerLogLevel(WorkerLogLevel)
+	, CloudWorkerLogLevel(WorkerLogLevel)
 	, bEnableMultiWorker(true)
 	, bUseRPCRingBuffers(true)
 	, DefaultRPCRingBufferSize(32)
@@ -125,6 +126,7 @@ USpatialGDKSettings::USpatialGDKSettings(const FObjectInitializer& ObjectInitial
 	, bUseSecureClientConnection(false)
 	, bUseSecureServerConnection(false)
 	, bEnableClientQueriesOnServer(false)
+	, bEnableCrossLayerActorSpawning(true)
 	, StartupLogRate(5.0f)
 {
 	DefaultReceptionistHost = SpatialConstants::LOCAL_HOST;
@@ -136,7 +138,6 @@ void USpatialGDKSettings::PostInitProperties()
 
 	// Check any command line overrides for using QBI, Offloading (after reading the config value):
 	const TCHAR* CommandLine = FCommandLine::Get();
-	CheckCmdLineOverrideBool(CommandLine, TEXT("OverrideHandover"), TEXT("Handover"), bEnableHandover);
 	CheckCmdLineOverrideBool(CommandLine, TEXT("EnableCrossLayerActorSpawning"), TEXT("Multiserver cross-layer Actor spawning"),
 							 bEnableCrossLayerActorSpawning);
 	CheckCmdLineOverrideBool(CommandLine, TEXT("OverrideRPCRingBuffers"), TEXT("RPC ring buffers"), bUseRPCRingBuffers);
@@ -275,10 +276,9 @@ bool USpatialGDKSettings::GetPreventClientCloudDeploymentAutoConnect() const
 };
 
 #if WITH_EDITOR
-void USpatialGDKSettings::SetMultiWorkerEnabled(bool bIsEnabled)
+void USpatialGDKSettings::SetMultiWorkerEditorEnabled(bool bIsEnabled)
 {
 	bEnableMultiWorker = bIsEnabled;
-	SaveConfig();
 }
 #endif // WITH_EDITOR
 

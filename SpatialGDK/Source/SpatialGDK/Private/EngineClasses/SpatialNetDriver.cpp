@@ -211,21 +211,22 @@ bool USpatialNetDriver::InitBase(bool bInitAsClient, FNetworkNotify* InNotify, c
 
 USpatialGameInstance* USpatialNetDriver::GetGameInstance() const
 {
-	USpatialGameInstance* GameInstance = nullptr;
-
-	// A client does not have a world at this point, so we use the WorldContext
+	// A client might not have a world at this point, so we use the WorldContext
 	// to get a reference to the GameInstance
 	if (bConnectAsClient)
 	{
-		const FWorldContext& WorldContext = GEngine->GetWorldContextFromPendingNetGameNetDriverChecked(this);
-		GameInstance = Cast<USpatialGameInstance>(WorldContext.OwningGameInstance);
-	}
-	else if (World != nullptr)
-	{
-		GameInstance = Cast<USpatialGameInstance>(World->GetGameInstance());
+		if (const FWorldContext* WorldContext = GEngine->GetWorldContextFromPendingNetGameNetDriver(this))
+		{
+			return Cast<USpatialGameInstance>(WorldContext->OwningGameInstance);
+		}
 	}
 
-	return GameInstance;
+	if (GetWorld() != nullptr)
+	{
+		return Cast<USpatialGameInstance>(GetWorld()->GetGameInstance());
+	}
+
+	return nullptr;
 }
 
 void USpatialNetDriver::InitiateConnectionToSpatialOS(const FURL& URL)
@@ -460,7 +461,7 @@ void USpatialNetDriver::CreateAndInitializeLoadBalancingClasses()
 		USpatialStatics::GetSpatialMultiWorkerClass(CurrentWorld);
 
 	const UAbstractSpatialMultiWorkerSettings* MultiWorkerSettings =
-		NewObject<UAbstractSpatialMultiWorkerSettings>(this, *MultiWorkerSettingsClass);
+		MultiWorkerSettingsClass->GetDefaultObject<UAbstractSpatialMultiWorkerSettings>();
 
 	if (bMultiWorkerEnabled && MultiWorkerSettings->LockingPolicy == nullptr)
 	{
@@ -674,7 +675,7 @@ void USpatialNetDriver::QueryGSMToLoadMap()
 void USpatialNetDriver::OnActorSpawned(AActor* Actor) const
 {
 	const USpatialGDKSettings* SpatialGDKSettings = GetDefault<USpatialGDKSettings>();
-	if (!SpatialGDKSettings->bEnableCrossLayerActorSpawning)
+	if (SpatialGDKSettings->bEnableCrossLayerActorSpawning)
 	{
 		return;
 	}
@@ -1663,12 +1664,11 @@ int32 USpatialNetDriver::ServerReplicateActors(float DeltaSeconds)
 	// Build the consider list (actors that are ready to replicate)
 	ServerReplicateActors_BuildConsiderList(ConsiderList, ServerTickTime);
 
-	const bool bIsMultiWorkerEnabled = USpatialStatics::IsMultiWorkerEnabled();
-
 	FSpatialLoadBalancingHandler MigrationHandler(this);
 	FSpatialNetDriverLoadBalancingContext LoadBalancingContext(this, ConsiderList);
 
-	if (bIsMultiWorkerEnabled)
+	bool bHandoverEnabled = USpatialStatics::IsHandoverEnabled(this);
+	if (bHandoverEnabled)
 	{
 		MigrationHandler.EvaluateActorsToMigrate(LoadBalancingContext);
 		LoadBalancingContext.UpdateWithAdditionalActors();
@@ -1724,7 +1724,7 @@ int32 USpatialNetDriver::ServerReplicateActors(float DeltaSeconds)
 	ServerReplicateActors_ProcessPrioritizedActors(SpatialConnection, ConnectionViewers, MigrationHandler, PriorityActors, FinalSortedCount,
 												   Updated);
 
-	if (bIsMultiWorkerEnabled)
+	if (bHandoverEnabled)
 	{
 		// Once an up to date version of the actors have been sent, do the actual migration.
 		MigrationHandler.ProcessMigrations();
