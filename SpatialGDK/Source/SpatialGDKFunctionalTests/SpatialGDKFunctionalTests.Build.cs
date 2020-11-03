@@ -31,5 +31,9 @@ public class SpatialGDKFunctionalTests : ModuleRules
         {
             PrivateDependencyModuleNames.Add("SpatialGDKServices");
         }
+        if (Target.Platform == UnrealTargetPlatform.Lumin)
+        {
+            PrecompileForTargets = PrecompileTargetsType.Any;
+        }
     }
 }
