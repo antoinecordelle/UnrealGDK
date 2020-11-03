@@ -31,6 +31,5 @@ public class SpatialGDKFunctionalTests : ModuleRules
         {
             PrivateDependencyModuleNames.Add("SpatialGDKServices");
         }
-        PrecompileForTargets = PrecompileTargetsType.Editor;
     }
 }

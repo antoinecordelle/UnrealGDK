@@ -44,5 +44,9 @@ public class SpatialGDKEditor : ModuleRules
 			{
 				"SpatialGDKEditor/Private",
 			});
-	}
+        if (Target.bBuildEditor)
+        {
+            PrivateDependencyModuleNames.Add("SpatialGDKServices");
+        }
+    }
 }
