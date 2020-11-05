@@ -1,6 +1,7 @@
 #include "Interop/Connection/SpatialWorkerConnection.h"
 
 #include "Interop/Connection/SpatialEventTracer.h"
+#include "Interop/CrossServerRPCSender.h"
 #include "SpatialGDKSettings.h"
 #include "SpatialView/CommandRequest.h"
 #include "SpatialView/ComponentData.h"
@@ -121,7 +122,7 @@ Worker_RequestId USpatialWorkerConnection::SendCommandRequest(Worker_EntityId En
 		return Coordinator->SendEntityCommandRequest(EntityId,
 													 SpatialGDK::CommandRequest(SpatialGDK::OwningCommandRequestPtr(Request->schema_type),
 																				Request->component_id, Request->command_index),
-													 SpatialGDK::RETRY_UNTIL_COMPLETE, SpanId);
+													 SpatialGDK::RETRY_MAX_TIMES, SpanId);
 	}
 
 	return Coordinator->SendEntityCommandRequest(EntityId,
