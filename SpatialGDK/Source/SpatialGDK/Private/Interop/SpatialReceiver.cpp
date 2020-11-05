@@ -1737,7 +1737,6 @@ void USpatialReceiver::OnCommandRequest(const Worker_Op& Op)
 
 		TOptional<Trace_SpanId> SpanId = EventTracer->CreateSpan(&Op.span_id, 1);
 		EventTracer->TraceEvent(FSpatialTraceEventBuilder::CreateReceiveCommandRequest(TEXT("SPAWN_PLAYER_COMMAND"), RequestId), SpanId);
-		return;
 	}
 	else if (ComponentId == SpatialConstants::SERVER_WORKER_COMPONENT_ID
 			 && CommandIndex == SpatialConstants::SERVER_WORKER_FORWARD_SPAWN_REQUEST_COMMAND_ID)
@@ -1747,7 +1746,6 @@ void USpatialReceiver::OnCommandRequest(const Worker_Op& Op)
 		TOptional<Trace_SpanId> SpanId = EventTracer->CreateSpan(&Op.span_id, 1);
 		EventTracer->TraceEvent(
 			FSpatialTraceEventBuilder::CreateReceiveCommandRequest(TEXT("SERVER_WORKER_FORWARD_SPAWN_REQUEST_COMMAND"), RequestId), SpanId);
-		return;
 	}
 	else if (ComponentId == SpatialConstants::RPCS_ON_ENTITY_CREATION_ID && CommandIndex == SpatialConstants::CLEAR_RPCS_ON_ENTITY_CREATION)
 	{
@@ -1757,7 +1755,6 @@ void USpatialReceiver::OnCommandRequest(const Worker_Op& Op)
 		TOptional<Trace_SpanId> SpanId = EventTracer->CreateSpan(&Op.span_id, 1);
 		EventTracer->TraceEvent(FSpatialTraceEventBuilder::CreateReceiveCommandRequest(TEXT("CLEAR_RPCS_ON_ENTITY_CREATION"), RequestId),
 								SpanId);
-		return;
 	}
 #if WITH_EDITOR
 	else if (ComponentId == SpatialConstants::GSM_SHUTDOWN_COMPONENT_ID
@@ -1768,7 +1765,6 @@ void USpatialReceiver::OnCommandRequest(const Worker_Op& Op)
 		TOptional<Trace_SpanId> SpanId = EventTracer->CreateSpan(&Op.span_id, 1);
 		EventTracer->TraceEvent(FSpatialTraceEventBuilder::CreateReceiveCommandRequest(TEXT("SHUTDOWN_MULTI_PROCESS_REQUEST"), RequestId),
 								SpanId);
-		return;
 	}
 #endif // WITH_EDITOR
 #if !UE_BUILD_SHIPPING
@@ -1812,7 +1808,6 @@ void USpatialReceiver::OnCommandResponse(const Worker_Op& Op)
 		NetDriver->PlayerSpawner->ReceivePlayerSpawnResponseOnClient(CommandResponseOp);
 		EventTracer->TraceEvent(FSpatialTraceEventBuilder::CreateReceiveCommandResponse(TEXT("SPAWN_PLAYER_COMMAND"), RequestId),
 								Op.span_id);
-		return;
 	}
 	else if (ComponentId == SpatialConstants::SERVER_WORKER_COMPONENT_ID)
 	{
@@ -1821,7 +1816,6 @@ void USpatialReceiver::OnCommandResponse(const Worker_Op& Op)
 		EventTracer->TraceEvent(
 			FSpatialTraceEventBuilder::CreateReceiveCommandResponse(TEXT("SERVER_WORKER_FORWARD_SPAWN_REQUEST_COMMAND"), RequestId),
 			SpanId);
-		return;
 	}
 }
 
