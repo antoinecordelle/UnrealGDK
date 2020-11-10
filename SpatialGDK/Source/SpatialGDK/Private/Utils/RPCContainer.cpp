@@ -87,17 +87,34 @@ void LogRPCError(const FRPCErrorInfo& ErrorInfo, ERPCQueueType QueueType, const 
 }
 } // namespace
 
-FPendingRPCParams::FPendingRPCParams(const FUnrealObjectRef& InTargetObjectRef, ERPCType InType, RPCPayload&& InPayload)
+FPendingRPCParams::FPendingRPCParams(const FUnrealObjectRef& InTargetObjectRef, const RPCSender& InSenderInfo, ERPCType InType,
+									 RPCPayload&& InPayload)
 	: ObjectRef(InTargetObjectRef)
+	, SenderRPCInfo(InSenderInfo)
 	, Payload(MoveTemp(InPayload))
 	, Timestamp(FDateTime::Now())
 	, Type(InType)
 {
 }
 
-void FRPCContainer::ProcessOrQueueRPC(const FUnrealObjectRef& TargetObjectRef, ERPCType Type, RPCPayload&& Payload)
+void FRPCContainer::ProcessOrQueueRPC(const FUnrealObjectRef& TargetObjectRef, const RPCSender& InSenderInfo, ERPCType Type,
+									  RPCPayload&& Payload)
 {
-	FPendingRPCParams Params{ TargetObjectRef, Type, MoveTemp(Payload) };
+	FArrayOfParams& ArrayOfParams = QueuedRPCs.FindOrAdd(Type).FindOrAdd(TargetObjectRef.Entity);
+
+	if (Type == ERPCType::CrossServerSender)
+	{
+		for (auto const& Entry : ArrayOfParams)
+		{
+			if (Entry.SenderRPCInfo == InSenderInfo)
+			{
+				// Already queued RPC, can happen while reading RPC over several frames.
+				return;
+			}
+		}
+	}
+
+	FPendingRPCParams Params{ TargetObjectRef, InSenderInfo, Type, MoveTemp(Payload) };
 
 	if (!ObjectHasRPCsQueuedOfType(Params.ObjectRef.Entity, Params.Type))
 	{
@@ -110,7 +127,6 @@ void FRPCContainer::ProcessOrQueueRPC(const FUnrealObjectRef& TargetObjectRef, E
 		}
 	}
 
-	FArrayOfParams& ArrayOfParams = QueuedRPCs.FindOrAdd(Params.Type).FindOrAdd(Params.ObjectRef.Entity);
 	ArrayOfParams.Push(MoveTemp(Params));
 }
 

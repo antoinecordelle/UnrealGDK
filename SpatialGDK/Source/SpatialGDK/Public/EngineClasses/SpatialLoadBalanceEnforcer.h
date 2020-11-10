@@ -50,6 +50,7 @@ public:
 
 	void Advance();
 	void ShortCircuitMaybeRefreshAcl(const Worker_EntityId EntityId);
+	void SetRoutingWorkerId(const PhysicalWorkerName& InRoutingWorkerName) { RoutingWorkerName = InRoutingWorkerName; }
 
 private:
 	void PopulateDataStore(const Worker_EntityId EntityId);
@@ -60,6 +61,7 @@ private:
 	EntityComponentUpdate ConstructAclUpdate(const Worker_EntityId EntityId, const PhysicalWorkerName* DestinationWorkerId);
 
 	const PhysicalWorkerName WorkerId;
+	PhysicalWorkerName RoutingWorkerName;
 	const FSubView* SubView;
 	const SpatialVirtualWorkerTranslator* VirtualWorkerTranslator;
 	TMap<Worker_EntityId_Key, LBComponents> DataStore;

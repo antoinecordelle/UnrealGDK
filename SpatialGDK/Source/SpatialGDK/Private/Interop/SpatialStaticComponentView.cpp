@@ -7,6 +7,7 @@
 #include "Schema/ClientRPCEndpointLegacy.h"
 #include "Schema/Component.h"
 #include "Schema/ComponentPresence.h"
+#include "Schema/CrossServerEndpoint.h"
 #include "Schema/DebugComponent.h"
 #include "Schema/Heartbeat.h"
 #include "Schema/Interest.h"

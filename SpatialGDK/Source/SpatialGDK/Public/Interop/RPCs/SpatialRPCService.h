@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 
 #include "ClientServerRPCService.h"
+#include "CrossServerRPCService.h"
 #include "Interop/Connection/SpatialEventTracer.h"
 #include "Interop/SpatialClassInfoManager.h"
 #include "MulticastRPCService.h"
@@ -35,10 +36,11 @@ public:
 
 	void ProcessIncomingRPCs();
 
-	void ProcessOrQueueIncomingRPC(const FUnrealObjectRef& InTargetObjectRef, RPCPayload InPayload);
+	void ProcessOrQueueIncomingRPC(const FUnrealObjectRef& InTargetObjectRef, const RPCSender& InSender, RPCPayload InPayload);
 
-	EPushRPCResult PushRPC(Worker_EntityId EntityId, ERPCType Type, RPCPayload Payload, bool bCreatedEntity, UObject* Target = nullptr,
-						   UFunction* Function = nullptr);
+	EPushRPCResult PushRPC(Worker_EntityId EntityId, const RPCSender& Sender, ERPCType Type, RPCPayload Payload, bool bCreatedEntity,
+						   UObject* Target = nullptr, UFunction* Function = nullptr);
+
 	void PushOverflowedRPCs();
 
 	struct UpdateToSend
@@ -67,6 +69,7 @@ private:
 	FRPCStore RPCStore;
 	ClientServerRPCService ClientServerRPCs;
 	MulticastRPCService MulticastRPCs;
+	CrossServerRPCService CrossServerRPCs;
 
 	// Keep around one of the passed subviews here in order to read the main view.
 	const FSubView* AuthSubView;

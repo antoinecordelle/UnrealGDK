@@ -154,7 +154,8 @@ Interest InterestFactory::CreateServerWorkerInterest(Worker_EntityId EntityId, c
 
 	// Add a self query to ensure we see the well known entity tag.
 	Query AuthoritySelfQuery = {};
-	AuthoritySelfQuery.ResultComponentIds = { SpatialConstants::GDK_KNOWN_ENTITY_TAG_COMPONENT_ID };
+	AuthoritySelfQuery.ResultComponentIds = { SpatialConstants::GDK_KNOWN_ENTITY_TAG_COMPONENT_ID,
+											  SpatialConstants::CROSSSERVER_SENDER_ACK_ENDPOINT_COMPONENT_ID };
 	AuthoritySelfQuery.Constraint.EntityIdConstraint = EntityId;
 	AddComponentQueryPairToInterestComponent(ServerInterest, SpatialConstants::SERVER_WORKER_COMPONENT_ID, AuthoritySelfQuery);
 
@@ -166,6 +167,25 @@ Interest InterestFactory::CreateServerWorkerInterest(Worker_EntityId EntityId, c
 		ServerQuery.Constraint.ComponentConstraint = SpatialConstants::GDK_DEBUG_COMPONENT_ID;
 		AddComponentQueryPairToInterestComponent(ServerInterest, SpatialConstants::POSITION_COMPONENT_ID, ServerQuery);
 	}
+
+	return ServerInterest;
+}
+
+Interest InterestFactory::CreateRoutingWorkerInterest()
+{
+	Interest ServerInterest;
+	Query ServerQuery;
+
+	ServerQuery.ResultComponentIds = SchemaResultType{
+		SpatialConstants::ROUTINGWORKER_TAG_COMPONENT_ID,
+		SpatialConstants::CROSSSERVER_RECEIVER_ENDPOINT_COMPONENT_ID,
+		SpatialConstants::CROSSSERVER_RECEIVER_ACK_ENDPOINT_COMPONENT_ID,
+		SpatialConstants::CROSSSERVER_SENDER_ENDPOINT_COMPONENT_ID,
+		SpatialConstants::CROSSSERVER_SENDER_ACK_ENDPOINT_COMPONENT_ID,
+	};
+	ServerQuery.Constraint.ComponentConstraint = SpatialConstants::ROUTINGWORKER_TAG_COMPONENT_ID;
+
+	AddComponentQueryPairToInterestComponent(ServerInterest, SpatialConstants::POSITION_COMPONENT_ID, ServerQuery);
 
 	return ServerInterest;
 }
@@ -492,7 +512,7 @@ void InterestFactory::AddNetCullDistanceQueries(Interest& OutInterest, const Que
 }
 
 void InterestFactory::AddComponentQueryPairToInterestComponent(Interest& OutInterest, const Worker_ComponentId ComponentId,
-															   const Query& QueryToAdd) const
+															   const Query& QueryToAdd)
 {
 	if (!OutInterest.ComponentInterestMap.Contains(ComponentId))
 	{

@@ -66,6 +66,11 @@ enum class EActorMigrationResult : uint8
 	DormantOnConnection
 };
 
+namespace SpatialGDK
+{
+struct SpatialRoutingSystem;
+}
+
 UCLASS()
 class SPATIALGDK_API USpatialNetDriver : public UIpNetDriver
 {
@@ -96,6 +101,9 @@ public:
 	virtual void Shutdown() override;
 	virtual void NotifyActorFullyDormantForConnection(AActor* Actor, UNetConnection* NetConnection) override;
 	virtual void OnOwnerUpdated(AActor* Actor, AActor* OldOwner) override;
+
+	virtual void PushCrossServerRPCSender(AActor* Sender) override;
+	virtual void PopCrossServerRPCSender(AActor* Sender) override;
 	// End UNetDriver interface.
 
 	void OnConnectionToSpatialOSSucceeded();
@@ -144,6 +152,9 @@ public:
 	void SetSpatialDebugger(ASpatialDebugger* InSpatialDebugger);
 	TWeakObjectPtr<USpatialNetConnection> FindClientConnectionFromWorkerId(const FString& WorkerId);
 	void CleanUpClientConnection(USpatialNetConnection* ClientConnection);
+	const FString& GetRoutingWorkerId();
+
+	void QueryRoutingWorkerId();
 
 	UPROPERTY()
 	USpatialWorkerConnection* Connection;
@@ -180,6 +191,8 @@ public:
 	USpatialWorkerFlags* SpatialWorkerFlags;
 	UPROPERTY()
 	USpatialNetDriverDebugContext* DebugCtx;
+
+	SpatialGDK::SpatialRoutingSystem* RoutingSystem = nullptr;
 
 	TUniquePtr<SpatialGDK::InterestFactory> InterestFactory;
 	TUniquePtr<SpatialGDK::SpatialLoadBalanceEnforcer> LoadBalanceEnforcer;
@@ -245,6 +258,8 @@ private:
 	bool bMapLoaded;
 
 	FString SnapshotToLoad;
+	FString RoutingWorkerId;
+	bool bRoutingWorkerQueryInFlight = false;
 
 	// Client variable which stores the SessionId given to us by the server in the URL options.
 	// Used to compare against the GSM SessionId to ensure the the server is ready to spawn players.

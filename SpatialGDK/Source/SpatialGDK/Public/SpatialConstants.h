@@ -23,7 +23,8 @@ enum class ERPCType : uint8
 	ServerReliable,
 	ServerUnreliable,
 	NetMulticast,
-	CrossServer
+	CrossServerSender,
+	CrossServerReceiver,
 };
 
 enum ESchemaComponentType : int32
@@ -57,8 +58,10 @@ inline FString RPCTypeToString(ERPCType RPCType)
 		return TEXT("Server, Unreliable");
 	case ERPCType::NetMulticast:
 		return TEXT("Multicast");
-	case ERPCType::CrossServer:
-		return TEXT("CrossServer");
+	case ERPCType::CrossServerSender:
+		return TEXT("CrossServerSender");
+	case ERPCType::CrossServerReceiver:
+		return TEXT("CrossServerReceiver");
 	}
 
 	checkNoEntry();
@@ -95,6 +98,7 @@ const Worker_ComponentId DEPLOYMENT_MAP_COMPONENT_ID = 9994;
 const Worker_ComponentId STARTUP_ACTOR_MANAGER_COMPONENT_ID = 9993;
 const Worker_ComponentId GSM_SHUTDOWN_COMPONENT_ID = 9992;
 const Worker_ComponentId HEARTBEAT_COMPONENT_ID = 9991;
+
 // Marking the event-based RPC components as legacy while the ring buffer
 // implementation is under a feature flag.
 const Worker_ComponentId CLIENT_RPC_ENDPOINT_COMPONENT_ID_LEGACY = 9990;
@@ -110,6 +114,11 @@ const Worker_ComponentId DORMANT_COMPONENT_ID = 9981;
 const Worker_ComponentId AUTHORITY_INTENT_COMPONENT_ID = 9980;
 const Worker_ComponentId VIRTUAL_WORKER_TRANSLATION_COMPONENT_ID = 9979;
 const Worker_ComponentId VISIBLE_COMPONENT_ID = 9970;
+
+const Worker_ComponentId CROSSSERVER_SENDER_ENDPOINT_COMPONENT_ID = 9960;
+const Worker_ComponentId CROSSSERVER_SENDER_ACK_ENDPOINT_COMPONENT_ID = 9961;
+const Worker_ComponentId CROSSSERVER_RECEIVER_ENDPOINT_COMPONENT_ID = 9962;
+const Worker_ComponentId CROSSSERVER_RECEIVER_ACK_ENDPOINT_COMPONENT_ID = 9963;
 
 const Worker_ComponentId CLIENT_ENDPOINT_COMPONENT_ID = 9978;
 const Worker_ComponentId SERVER_ENDPOINT_COMPONENT_ID = 9977;
@@ -127,8 +136,10 @@ const Worker_ComponentId FIRST_EC_COMPONENT_ID = 2001;
 const Worker_ComponentId ACTOR_AUTH_TAG_COMPONENT_ID = 2001;
 const Worker_ComponentId ACTOR_NON_AUTH_TAG_COMPONENT_ID = 2002;
 const Worker_ComponentId LB_TAG_COMPONENT_ID = 2005;
+
 const Worker_ComponentId GDK_KNOWN_ENTITY_TAG_COMPONENT_ID = 2007;
-const Worker_ComponentId LAST_EC_COMPONENT_ID = 2008;
+const Worker_ComponentId ROUTINGWORKER_TAG_COMPONENT_ID = 2009;
+const Worker_ComponentId LAST_EC_COMPONENT_ID = 2009;
 
 const Schema_FieldId DEPLOYMENT_MAP_MAP_URL_ID = 1;
 const Schema_FieldId DEPLOYMENT_MAP_ACCEPTING_PLAYERS_ID = 2;
@@ -243,12 +254,15 @@ const FString INVALID_WORKER_NAME = TEXT("");
 
 static const FName DefaultLayer = FName(TEXT("DefaultLayer"));
 
+const FName RoutingWorkerType(TEXT("RoutingWorker"));
+
 const WorkerAttributeSet UnrealServerAttributeSet = TArray<FString>{ DefaultServerWorkerType.ToString() };
+const WorkerAttributeSet UnrealRoutingWorkerAttributeSet = TArray<FString>{ RoutingWorkerType.ToString() };
 const WorkerAttributeSet UnrealClientAttributeSet = TArray<FString>{ DefaultClientWorkerType.ToString() };
 
-const WorkerRequirementSet UnrealServerPermission{ { UnrealServerAttributeSet } };
 const WorkerRequirementSet UnrealClientPermission{ { UnrealClientAttributeSet } };
-const WorkerRequirementSet ClientOrServerPermission{ { UnrealClientAttributeSet, UnrealServerAttributeSet } };
+const WorkerRequirementSet ClientOrServerPermission{ { UnrealClientAttributeSet, UnrealServerAttributeSet,
+													   UnrealRoutingWorkerAttributeSet } };
 
 const FString ClientsStayConnectedURLOption = TEXT("clientsStayConnected");
 const FString SpatialSessionIdURLOption = TEXT("spatialSessionId=");
@@ -373,6 +387,9 @@ const TArray<Worker_ComponentId> REQUIRED_COMPONENTS_FOR_AUTH_SERVER_INTEREST =
 	TArray<Worker_ComponentId>{ // RPCs from clients
 								CLIENT_ENDPOINT_COMPONENT_ID, CLIENT_RPC_ENDPOINT_COMPONENT_ID_LEGACY,
 
+								// Cross server endpoint
+								CROSSSERVER_SENDER_ACK_ENDPOINT_COMPONENT_ID, CROSSSERVER_RECEIVER_ENDPOINT_COMPONENT_ID,
+
 								// Heartbeat
 								HEARTBEAT_COMPONENT_ID,
 
@@ -389,7 +406,7 @@ inline Worker_ComponentId RPCTypeToWorkerComponentIdLegacy(ERPCType RPCType)
 {
 	switch (RPCType)
 	{
-	case ERPCType::CrossServer:
+	case ERPCType::CrossServerSender:
 	{
 		return SpatialConstants::SERVER_TO_SERVER_COMMAND_ENDPOINT_COMPONENT_ID;
 	}

@@ -127,6 +127,7 @@ EntityComponentUpdate SpatialLoadBalanceEnforcer::ConstructAclUpdate(const Worke
 	const FString& WriteWorkerId = FString::Printf(TEXT("workerId:%s"), **DestinationWorkerId);
 
 	const WorkerAttributeSet OwningServerWorkerAttributeSet = { WriteWorkerId };
+	const WorkerAttributeSet RoutingWorkerRequirementSet = { FString::Format(TEXT("workerId:{0}"), { *RoutingWorkerName }) };
 
 	for (const Worker_ComponentId ComponentId : ComponentIds)
 	{
@@ -139,6 +140,10 @@ EntityComponentUpdate SpatialLoadBalanceEnforcer::ConstructAclUpdate(const Worke
 			break;
 		case SpatialConstants::ENTITY_ACL_COMPONENT_ID:
 			Acl.ComponentWriteAcl.Add(ComponentId, { SpatialConstants::UnrealServerAttributeSet });
+			break;
+		case SpatialConstants::CROSSSERVER_SENDER_ACK_ENDPOINT_COMPONENT_ID:
+		case SpatialConstants::CROSSSERVER_RECEIVER_ENDPOINT_COMPONENT_ID:
+			Acl.ComponentWriteAcl.Add(ComponentId, { RoutingWorkerRequirementSet });
 			break;
 		default:
 			Acl.ComponentWriteAcl.Add(ComponentId, { OwningServerWorkerAttributeSet });
