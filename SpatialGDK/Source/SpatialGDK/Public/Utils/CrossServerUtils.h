@@ -11,19 +11,27 @@ namespace SpatialGDK
 {
 namespace CrossServer
 {
+inline void WritePayloadAndCounterpart(Schema_Object* EndpointObject, const RPCPayload& Payload, const CrossServerRPCInfo& Info,
+									   uint32_t SlotIdx)
+{
+	RPCRingBufferDescriptor Descriptor = RPCRingBufferUtils::GetRingBufferDescriptor(ERPCType::CrossServerReceiver);
+	uint32 Field = Descriptor.GetRingBufferElementFieldId(ERPCType::CrossServerReceiver, SlotIdx + 1);
+
+	Schema_Object* RPCObject = Schema_AddObject(EndpointObject, Field);
+	Payload.WriteToSchemaObject(RPCObject);
+
+	Info.AddToSchema(EndpointObject, Field + 1);
+}
+
 typedef TPair<Worker_EntityId_Key, uint64> RPCKey;
 
 struct SentRPCEntry
 {
 	bool operator==(SentRPCEntry const& iRHS) const { return FMemory::Memcmp(this, &iRHS, sizeof(SentRPCEntry)) == 0; }
 
-	// RPCKey RPCId;
-	// Worker_EntityId Target;
 	RPCTarget Target;
-	// uint64 Timestamp;
 	uint32 SourceSlot;
 	TOptional<uint32> DestinationSlot;
-	// TOptional<Worker_RequestId> EntityRequest;
 };
 
 struct SlotAlloc
@@ -118,41 +126,27 @@ struct RPCSchedule
 	TArray<RPCKey> SendingSchedule;
 };
 
-struct SenderState
+struct WriterState
 {
 	uint64 LastSentRPCId = 0;
 	TMap<RPCKey, SentRPCEntry> Mailbox;
-	RPCSchedule Schedule;
 	SlotAlloc Alloc;
-};
-
-struct ACKSlot
-{
-	bool operator==(const ACKSlot& Other) const { return Receiver == Other.Receiver && Slot == Other.Slot; }
-
-	Worker_EntityId Receiver = 0;
-	uint32 Slot = -1;
 };
 
 struct RPCSlots
 {
-	ACKSlot ReceiverSlot;
-	int32 SenderACKSlot = -1;
+	Worker_EntityId CounterpartEntity;
+	int32 CounterpartSlot = -1;
+	int32 ACKSlot = -1;
 };
 
-typedef TMap<RPCKey, RPCSlots> RPCAllocMap;
+using ReadRPCMap = TMap<CrossServer::RPCKey, RPCSlots>;
 
-inline void WritePayloadAndCounterpart(Schema_Object* EndpointObject, const RPCPayload& Payload, const CrossServerRPCInfo& Info,
-									   uint32_t SlotIdx)
+struct ReaderState
 {
-	RPCRingBufferDescriptor Descriptor = RPCRingBufferUtils::GetRingBufferDescriptor(ERPCType::CrossServerReceiver);
-	uint32 Field = Descriptor.GetRingBufferElementFieldId(ERPCType::CrossServerReceiver, SlotIdx + 1);
-
-	Schema_Object* RPCObject = Schema_AddObject(EndpointObject, Field);
-	Payload.WriteToSchemaObject(RPCObject);
-
-	Info.AddToSchema(EndpointObject, Field + 1);
-}
+	ReadRPCMap RPCSlots;
+	SlotAlloc ACKAlloc;
+};
 
 } // namespace CrossServer
 } // namespace SpatialGDK

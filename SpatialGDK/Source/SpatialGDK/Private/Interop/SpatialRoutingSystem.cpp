@@ -60,7 +60,7 @@ void SpatialRoutingSystem::ProcessUpdate(Worker_EntityId Entity, const Component
 void SpatialRoutingSystem::OnSenderChanged(Worker_EntityId SenderId, RoutingComponents& Components)
 {
 	TMap<CrossServer::RPCKey, Worker_EntityId> ReceiverDisappeared;
-	CrossServer::RPCAllocMap SlotsToClear = Components.AllocMap;
+	CrossServer::ReadRPCMap SlotsToClear = Components.SenderACKState.RPCSlots;
 
 	const RPCRingBuffer& Buffer = Components.Sender->ReliableRPCBuffer;
 
@@ -79,7 +79,7 @@ void SpatialRoutingSystem::OnSenderChanged(Worker_EntityId SenderId, RoutingComp
 
 			if (RoutingComponents* ReceiverComps = RoutingWorkerView.Find(Receiver))
 			{
-				if (ReceiverComps->Receiver.Mailbox.Find(RPCKey) == nullptr)
+				if (ReceiverComps->ReceiverState.Mailbox.Find(RPCKey) == nullptr)
 				{
 					CrossServer::SentRPCEntry Entry;
 					// Entry.RPCId = RPCKey;
@@ -87,8 +87,8 @@ void SpatialRoutingSystem::OnSenderChanged(Worker_EntityId SenderId, RoutingComp
 					// Entry.Timestamp = FPlatformTime::Cycles64();
 					Entry.SourceSlot = SlotIdx;
 
-					ReceiverComps->Receiver.Mailbox.Add(RPCKey, Entry);
-					ReceiverComps->Receiver.Schedule.Add(RPCKey);
+					ReceiverComps->ReceiverState.Mailbox.Add(RPCKey, Entry);
+					ReceiverComps->ReceiverSchedule.Add(RPCKey);
 					ReceiversToInspect.Add(Receiver);
 				}
 			}
@@ -102,28 +102,27 @@ void SpatialRoutingSystem::OnSenderChanged(Worker_EntityId SenderId, RoutingComp
 	for (auto const& SlotToClear : SlotsToClear)
 	{
 		const CrossServer::RPCSlots& Slots = SlotToClear.Value;
-
 		{
 			EntityComponentId SenderPair(SenderId, SpatialConstants::CROSSSERVER_SENDER_ACK_ENDPOINT_COMPONENT_ID);
-			Components.SenderACKAlloc.FreeSlot(Slots.SenderACKSlot);
+			Components.SenderACKState.ACKAlloc.FreeSlot(Slots.ACKSlot);
 
 			GetOrCreateComponentUpdate(SenderPair);
 		}
 
-		if (RoutingComponents* ReceiverComps = RoutingWorkerView.Find(Slots.ReceiverSlot.Receiver))
+		if (RoutingComponents* ReceiverComps = RoutingWorkerView.Find(Slots.CounterpartEntity))
 		{
-			ClearReceiverSlot(Slots.ReceiverSlot.Receiver, SlotToClear.Key, *ReceiverComps);
+			ClearReceiverSlot(Slots.CounterpartEntity, SlotToClear.Key, *ReceiverComps);
 		}
 
-		Components.AllocMap.Remove(SlotToClear.Key);
+		Components.SenderACKState.RPCSlots.Remove(SlotToClear.Key);
 	}
 
 	for (auto RPC : ReceiverDisappeared)
 	{
-		auto& Slots = Components.AllocMap.FindOrAdd(RPC.Key);
-		if (Slots.SenderACKSlot < 0)
+		auto& Slots = Components.SenderACKState.RPCSlots.FindOrAdd(RPC.Key);
+		if (Slots.ACKSlot < 0)
 		{
-			Slots.ReceiverSlot.Receiver = RPC.Value;
+			Slots.CounterpartEntity = RPC.Value;
 			WriteACKToSender(RPC.Key, Components);
 		}
 	}
@@ -131,7 +130,7 @@ void SpatialRoutingSystem::OnSenderChanged(Worker_EntityId SenderId, RoutingComp
 
 void SpatialRoutingSystem::ClearReceiverSlot(Worker_EntityId Receiver, CrossServer::RPCKey RPCKey, RoutingComponents& ReceiverComponents)
 {
-	CrossServer::SentRPCEntry* SentRPC = ReceiverComponents.Receiver.Mailbox.Find(RPCKey);
+	CrossServer::SentRPCEntry* SentRPC = ReceiverComponents.ReceiverState.Mailbox.Find(RPCKey);
 	check(SentRPC != nullptr);
 
 	EntityComponentId ReceiverPair(Receiver, SpatialConstants::CROSSSERVER_RECEIVER_ENDPOINT_COMPONENT_ID);
@@ -139,11 +138,11 @@ void SpatialRoutingSystem::ClearReceiverSlot(Worker_EntityId Receiver, CrossServ
 	check(SentRPC->DestinationSlot.IsSet());
 	uint32 SlotIdx = SentRPC->DestinationSlot.GetValue();
 
-	ReceiverComponents.Receiver.Mailbox.Remove(RPCKey);
-	ReceiverComponents.Receiver.Alloc.FreeSlot(SlotIdx);
+	ReceiverComponents.ReceiverState.Mailbox.Remove(RPCKey);
+	ReceiverComponents.ReceiverState.Alloc.FreeSlot(SlotIdx);
 
 	GetOrCreateComponentUpdate(ReceiverPair);
-	if (!ReceiverComponents.Receiver.Schedule.IsEmpty())
+	if (!ReceiverComponents.ReceiverSchedule.IsEmpty())
 	{
 		ReceiversToInspect.Add(ReceiverPair.Get<0>());
 	}
@@ -153,15 +152,15 @@ void SpatialRoutingSystem::TransferRPCsToReceiver(Worker_EntityId ReceiverId, Ro
 {
 	if (RoutingComponents* ReceiverComps = RoutingWorkerView.Find(ReceiverId))
 	{
-		while (!ReceiverComps->Receiver.Schedule.IsEmpty())
+		while (!ReceiverComps->ReceiverSchedule.IsEmpty())
 		{
-			TOptional<uint32> FreeSlot = ReceiverComps->Receiver.Alloc.PeekFreeSlot();
+			TOptional<uint32> FreeSlot = ReceiverComps->ReceiverState.Alloc.PeekFreeSlot();
 			if (!FreeSlot)
 			{
 				return;
 			}
-			CrossServer::RPCKey RPCToSend = ReceiverComps->Receiver.Schedule.Extract();
-			CrossServer::SentRPCEntry& SentRPC = ReceiverComps->Receiver.Mailbox.FindChecked(RPCToSend);
+			CrossServer::RPCKey RPCToSend = ReceiverComps->ReceiverSchedule.Extract();
+			CrossServer::SentRPCEntry& SentRPC = ReceiverComps->ReceiverState.Mailbox.FindChecked(RPCToSend);
 
 			check(!SentRPC.DestinationSlot.IsSet());
 
@@ -172,7 +171,7 @@ void SpatialRoutingSystem::TransferRPCsToReceiver(Worker_EntityId ReceiverId, Ro
 
 			if (!SenderComps)
 			{
-				ReceiverComps->Receiver.Mailbox.Remove(RPCToSend);
+				ReceiverComps->ReceiverState.Mailbox.Remove(RPCToSend);
 				// Sender disappeared before we could deliver the RPC :/ copy payload ? tombstone? drop?
 				continue;
 			}
@@ -188,15 +187,13 @@ void SpatialRoutingSystem::TransferRPCsToReceiver(Worker_EntityId ReceiverId, Ro
 			CrossServer::WritePayloadAndCounterpart(EndpointObject, *Element, CrossServerRPCInfo(SenderId, RPCId), SlotIdx);
 
 			SentRPC.DestinationSlot = SlotIdx;
-			ReceiverComps->Receiver.Alloc.CommitSlot(SlotIdx);
+			ReceiverComps->ReceiverState.Alloc.CommitSlot(SlotIdx);
 
-			CrossServer::ACKSlot ReceiverSlot;
-			ReceiverSlot.Receiver = ReceiverId;
+			CrossServer::RPCSlots NewSlot;
+			NewSlot.CounterpartEntity = ReceiverId;
+			NewSlot.CounterpartSlot = SlotIdx;
 
-			// This one is superfluous.
-			ReceiverSlot.Slot = SlotIdx;
-
-			SenderComps->AllocMap.Add(RPCToSend).ReceiverSlot = ReceiverSlot;
+			SenderComps->SenderACKState.RPCSlots.Add(RPCToSend) = NewSlot;
 		}
 	}
 }
@@ -204,14 +201,14 @@ void SpatialRoutingSystem::TransferRPCsToReceiver(Worker_EntityId ReceiverId, Ro
 void SpatialRoutingSystem::WriteACKToSender(CrossServer::RPCKey RPCKey, RoutingComponents& SenderComponents)
 {
 	// Both SentRPC and Slots entries should be cleared at the same time.
-	CrossServer::RPCSlots* Slots = SenderComponents.AllocMap.Find(RPCKey);
+	CrossServer::RPCSlots* Slots = SenderComponents.SenderACKState.RPCSlots.Find(RPCKey);
 	check(Slots != nullptr);
 
-	if (Slots->SenderACKSlot < 0)
+	if (Slots->ACKSlot < 0)
 	{
-		if (TOptional<uint32_t> ReservedSlot = SenderComponents.SenderACKAlloc.ReserveSlot())
+		if (TOptional<uint32_t> ReservedSlot = SenderComponents.SenderACKState.ACKAlloc.ReserveSlot())
 		{
-			Slots->SenderACKSlot = ReservedSlot.GetValue();
+			Slots->ACKSlot = ReservedSlot.GetValue();
 			EntityComponentId SenderPair(RPCKey.Get<0>(), SpatialConstants::CROSSSERVER_SENDER_ACK_ENDPOINT_COMPONENT_ID);
 			Schema_ComponentUpdate* Update = GetOrCreateComponentUpdate(SenderPair);
 			Schema_Object* UpdateObject = Schema_GetComponentUpdateFields(Update);
@@ -220,7 +217,7 @@ void SpatialRoutingSystem::WriteACKToSender(CrossServer::RPCKey RPCKey, RoutingC
 			SenderACK.Sender = RPCKey.Get<0>();
 			SenderACK.RPCId = RPCKey.Get<1>();
 
-			Schema_Object* NewEntry = Schema_AddObject(UpdateObject, 2 + Slots->SenderACKSlot);
+			Schema_Object* NewEntry = Schema_AddObject(UpdateObject, 2 + Slots->ACKSlot);
 			SenderACK.WriteToSchema(NewEntry);
 		}
 		else
@@ -246,7 +243,7 @@ void SpatialRoutingSystem::OnReceiverACKChanged(Worker_EntityId EntityId, Routin
 			const ACKItem& ReceiverACKItem = ReceiverACK.ACKArray[SlotIdx].GetValue();
 
 			CrossServer::RPCKey RPCKey(ReceiverACKItem.Sender, ReceiverACKItem.RPCId);
-			CrossServer::SentRPCEntry* SentRPC = Components.Receiver.Mailbox.Find(RPCKey);
+			CrossServer::SentRPCEntry* SentRPC = Components.ReceiverState.Mailbox.Find(RPCKey);
 			if (SentRPC == nullptr)
 			{
 				continue;
@@ -269,6 +266,7 @@ void SpatialRoutingSystem::OnReceiverACKChanged(Worker_EntityId EntityId, Routin
 Schema_ComponentUpdate* SpatialRoutingSystem::GetOrCreateComponentUpdate(
 	TPair<Worker_EntityId_Key, Worker_ComponentId> EntityComponentIdPair)
 {
+	check(EntityComponentIdPair.Key != 0);
 	Schema_ComponentUpdate** ComponentUpdatePtr = PendingComponentUpdatesToSend.Find(EntityComponentIdPair);
 	if (ComponentUpdatePtr == nullptr)
 	{
@@ -358,9 +356,10 @@ void SpatialRoutingSystem::Advance(SpatialOSWorkerInterface* Connection)
 						const TOptional<ACKItem>& Slot = TempView.ACKArray[SlotIdx];
 						if (Slot.IsSet())
 						{
-							CrossServer::RPCSlots& Slots = Components.AllocMap.FindOrAdd(CrossServer::RPCKey(Slot->Sender, Slot->RPCId));
-							Slots.SenderACKSlot = SlotIdx;
-							Components.SenderACKAlloc.CommitSlot(SlotIdx);
+							CrossServer::RPCSlots& Slots =
+								Components.SenderACKState.RPCSlots.FindOrAdd(CrossServer::RPCKey(Slot->Sender, Slot->RPCId));
+							Slots.ACKSlot = SlotIdx;
+							Components.SenderACKState.ACKAlloc.CommitSlot(SlotIdx);
 						}
 					}
 				}
@@ -385,14 +384,14 @@ void SpatialRoutingSystem::Advance(SpatialOSWorkerInterface* Connection)
 							// NewEntry.Timestamp = 0;
 							// NewEntry.EntityRequest = 0;
 
-							Components.Receiver.Mailbox.Add(RPCKey, NewEntry);
-							Components.Receiver.Alloc.CommitSlot(SlotIdx);
+							Components.ReceiverState.Mailbox.Add(RPCKey, NewEntry);
+							Components.ReceiverState.Alloc.CommitSlot(SlotIdx);
 
 							RoutingComponents& SenderComponents = RoutingWorkerView.FindOrAdd(NewEntry.Target.Entity);
 							// If we were reloading a snapshot, have to check that the sender still exists.
-							CrossServer::RPCSlots& Slots = SenderComponents.AllocMap.FindOrAdd(RPCKey);
-							Slots.ReceiverSlot.Receiver = Delta.EntityId;
-							Slots.ReceiverSlot.Slot = SlotIdx;
+							CrossServer::RPCSlots& Slots = SenderComponents.SenderACKState.RPCSlots.FindOrAdd(RPCKey);
+							Slots.CounterpartEntity = Delta.EntityId;
+							Slots.CounterpartSlot = SlotIdx;
 						}
 					}
 				}
@@ -416,7 +415,7 @@ void SpatialRoutingSystem::Advance(SpatialOSWorkerInterface* Connection)
 
 			if (RoutingComponents* Components = RoutingWorkerView.Find(Delta.EntityId))
 			{
-				for (auto MailboxItem : Components->Receiver.Mailbox)
+				for (auto MailboxItem : Components->ReceiverState.Mailbox)
 				{
 					CrossServer::SentRPCEntry& Entry = MailboxItem.Value;
 					if (Entry.DestinationSlot)
@@ -429,10 +428,10 @@ void SpatialRoutingSystem::Advance(SpatialOSWorkerInterface* Connection)
 					}
 				}
 
-				for (auto Slots : Components->AllocMap)
+				for (auto Slots : Components->SenderACKState.RPCSlots)
 				{
-					Worker_EntityId Receiver = Slots.Value.ReceiverSlot.Receiver;
-					if (Receiver != SpatialConstants::INVALID_ENTITY_ID && Slots.Value.SenderACKSlot != -1)
+					Worker_EntityId Receiver = Slots.Value.CounterpartEntity;
+					if (Receiver != SpatialConstants::INVALID_ENTITY_ID && Slots.Value.ACKSlot != -1)
 					{
 						// The receiver would be waiting for an update from the sender.
 						RoutingComponents* ReceiverComponents = RoutingWorkerView.Find(Receiver);
@@ -472,7 +471,7 @@ void SpatialRoutingSystem::Flush(SpatialOSWorkerInterface* Connection)
 			{
 				RPCRingBufferDescriptor Descriptor = RPCRingBufferUtils::GetRingBufferDescriptor(ERPCType::CrossServerReceiver);
 
-				Components->Receiver.Alloc.ForeachClearedSlot([&](uint32_t ToClear) {
+				Components->ReceiverState.Alloc.ForeachClearedSlot([&](uint32_t ToClear) {
 					uint32 Field = Descriptor.GetRingBufferElementFieldId(ERPCType::CrossServerReceiver, ToClear + 1);
 
 					Schema_AddComponentUpdateClearedField(Entry.Value, Field);
@@ -482,10 +481,8 @@ void SpatialRoutingSystem::Flush(SpatialOSWorkerInterface* Connection)
 
 			if (CompId == SpatialConstants::CROSSSERVER_SENDER_ACK_ENDPOINT_COMPONENT_ID)
 			{
-				Components->SenderACKAlloc.ForeachClearedSlot([&](uint32_t ToClear) {
+				Components->SenderACKState.ACKAlloc.ForeachClearedSlot([&](uint32_t ToClear) {
 					Schema_AddComponentUpdateClearedField(Entry.Value, ToClear + 2);
-
-					Components->SenderACKAlloc.ToClear[ToClear] = false;
 				});
 			}
 		}
@@ -522,6 +519,11 @@ void SpatialRoutingSystem::CreateRoutingWorkerEntity(SpatialOSWorkerInterface* C
 	Components.Add(InterestFactory::CreateRoutingWorkerInterest().CreateInterestData());
 
 	RoutingWorkerEntityRequest = Connection->SendCreateEntityRequest(Components, &RoutingWorkerEntity);
+}
+
+void SpatialRoutingSystem::Destroy(SpatialOSWorkerInterface* Connection)
+{
+	Connection->SendDeleteEntityRequest(RoutingWorkerEntity);
 }
 
 } // namespace SpatialGDK

@@ -138,7 +138,7 @@ const Worker_ComponentId ACTOR_NON_AUTH_TAG_COMPONENT_ID = 2002;
 const Worker_ComponentId LB_TAG_COMPONENT_ID = 2005;
 
 const Worker_ComponentId GDK_KNOWN_ENTITY_TAG_COMPONENT_ID = 2007;
-const Worker_ComponentId ROUTINGWORKER_TAG_COMPONENT_ID = 2009;
+const Worker_ComponentId ROUTINGWORKER_TAG_COMPONENT_ID = 2008;
 const Worker_ComponentId LAST_EC_COMPONENT_ID = 2009;
 
 const Schema_FieldId DEPLOYMENT_MAP_MAP_URL_ID = 1;

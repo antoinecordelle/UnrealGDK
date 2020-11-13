@@ -902,6 +902,14 @@ void USpatialNetDriver::BeginDestroy()
 
 	if (Connection != nullptr)
 	{
+		if (RoutingSystem)
+		{
+			RoutingSystem->Destroy(Connection);
+
+			Connection->Flush();
+			FPlatformProcess::Sleep(0.1f);
+		}
+
 		// Cleanup our corresponding worker entity if it exists.
 		if (WorkerEntityId != SpatialConstants::INVALID_ENTITY_ID)
 		{
@@ -1885,7 +1893,7 @@ void USpatialNetDriver::TickDispatch(float DeltaTime)
 			{
 				RPCService->AdvanceView();
 			}
-			
+
 			{
 				SCOPE_CYCLE_COUNTER(STAT_SpatialProcessOps);
 				Dispatcher->ProcessOps(GetOpsFromEntityDeltas(Connection->GetEntityDeltas()));
@@ -1902,8 +1910,8 @@ void USpatialNetDriver::TickDispatch(float DeltaTime)
 				WellKnownEntitySystem->Advance();
 			}
 		}
-		
-		if(RoutingSystem)
+
+		if (RoutingSystem)
 		{
 			RoutingSystem->Advance(Connection);
 		}

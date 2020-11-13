@@ -25,19 +25,24 @@ struct FRPCStore;
 
 struct CrossServerEndpoints
 {
-	// CrossServerEndpointSender
-	CrossServerEndpointSenderACK ACKedRPCs;
-	CrossServerEndpointReceiver ReceivedRPCs;
-	// CrossServerEndpointReceiverACK
+	// Locally authoritative state
+	CrossServer::RPCSchedule ReceiverSchedule;
+	CrossServer::WriterState SenderState;
+	CrossServer::ReaderState ReceiverACKState;
+
+	// Observed state
+	TOptional<CrossServerEndpointSenderACK> ACKedRPCs;
+	TOptional<CrossServerEndpointReceiver> ReceivedRPCs;
 };
 
 class SPATIALGDK_API CrossServerRPCService
 {
 public:
-	CrossServerRPCService(const ExtractRPCDelegate InExtractRPCCallback, const FSubView& InSubView, USpatialNetDriver* InNetDriver,
+	CrossServerRPCService(const ExtractRPCDelegate InExtractRPCCallback, const FSubView& InSubView /*, USpatialNetDriver* InNetDriver*/,
 						  FRPCStore& InRPCStore);
 
-	void Advance();
+	void AdvanceView();
+	void ProcessChanges();
 
 	// Public state functions for the main Spatial RPC service to expose bookkeeping around overflows and acks.
 	// Could be moved into RPCStore. Note: Needs revisiting at some point, this is a strange boundary.
@@ -55,6 +60,7 @@ private:
 	// Process relevant view delta changes.
 	void EntityAdded(const Worker_EntityId EntityId);
 	void ComponentUpdate(const Worker_EntityId EntityId, const Worker_ComponentId ComponentId, Schema_ComponentUpdate* Update);
+	void ProcessComponentChange(const Worker_EntityId EntityId, const Worker_ComponentId ComponentId);
 
 	// Maintain local state of client server RPCs.
 	void PopulateDataStore(Worker_EntityId EntityId);
@@ -62,7 +68,6 @@ private:
 
 	// Client server RPC system responses to state changes.
 	void OnEndpointAuthorityGained(Worker_EntityId EntityId, Worker_ComponentId ComponentId);
-	void OnEndpointAuthorityLost(Worker_EntityId EntityId, Worker_ComponentId ComponentId);
 	// void ClearOverflowedRPCs(Worker_EntityId EntityId);
 
 	// The component with the given component ID was updated, and so there is an RPC to be handled.
@@ -78,36 +83,12 @@ private:
 
 	ExtractRPCDelegate ExtractRPCCallback;
 	const FSubView* SubView;
-	USpatialNetDriver* NetDriver;
+	// USpatialNetDriver* NetDriver;
 
 	FRPCStore* RPCStore;
 
 	// Deserialized state store for client/server RPC components.
 	TMap<Worker_EntityId_Key, CrossServerEndpoints> CrossServerDataStore;
-
-	// Stored here for things we have authority over.
-
-	// For each sender actor, map of the sent RPCs.
-	TMap<Worker_EntityId_Key, CrossServer::SenderState> ActorSenderState;
-
-	// For receiver
-	// Contains the number of available slots for acks for the given receiver.
-	TMap<Worker_EntityId_Key, CrossServer::SlotAlloc> ACKAllocMap;
-
-	struct ReceiverState
-	{
-		CrossServer::RPCSchedule Schedule;
-		struct Item
-		{
-			uint32 Slot;
-			CrossServer::ACKSlot ACKSlot;
-		};
-		TMap<CrossServer::RPCKey, Item> Slots;
-	};
-	// Map from receiving endpoint to ack slots.
-	TMap<Worker_EntityId_Key, ReceiverState> ReceiverMap;
-
-	TSet<Worker_EntityId_Key> StaleEntities;
 };
 
 } // namespace SpatialGDK

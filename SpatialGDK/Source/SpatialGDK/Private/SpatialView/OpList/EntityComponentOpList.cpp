@@ -1,4 +1,4 @@
-﻿// Copyright (c) Improbable Worlds Ltd, All Rights Reserved
+// Copyright (c) Improbable Worlds Ltd, All Rights Reserved
 
 #include "SpatialView/OpList/EntityComponentOpList.h"
 
@@ -9,6 +9,14 @@ namespace SpatialGDK
 EntityComponentOpListBuilder::EntityComponentOpListBuilder()
 	: OpListData(MakeUnique<EntityComponentOpListData>())
 {
+}
+
+EntityComponentOpListBuilder EntityComponentOpListBuilder::Move()
+{
+	EntityComponentOpListBuilder MovedBuilder;
+	Swap(OpListData, MovedBuilder.OpListData);
+
+	return MoveTemp(MovedBuilder);
 }
 
 EntityComponentOpListBuilder& EntityComponentOpListBuilder::AddEntity(Worker_EntityId EntityId)

@@ -20,5 +20,5 @@ component GDKKnownEntityTag {
 }
 
 component RoutingWorkerEntityTag {
-    id = 2009;
+    id = 2008;
 }

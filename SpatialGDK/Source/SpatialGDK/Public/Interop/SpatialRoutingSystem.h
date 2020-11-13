@@ -28,21 +28,17 @@ struct SpatialRoutingSystem
 
 	void Flush(SpatialOSWorkerInterface* Connection);
 
+	void Destroy(SpatialOSWorkerInterface* Connection);
+
 private:
 	const FSubView& SubView;
 
 	struct RoutingComponents
 	{
 		TOptional<CrossServerEndpointSender> Sender;
-
-		// Allocation slots for Sender ACKSlots
-		CrossServer::SlotAlloc SenderACKAlloc;
-
-		// Map of Receiver slots and Sender ACK slots to check when the sender buffer changes.
-		CrossServer::RPCAllocMap AllocMap;
-
-		CrossServer::SenderState Receiver;
-
+		CrossServer::ReaderState SenderACKState;
+		CrossServer::RPCSchedule ReceiverSchedule;
+		CrossServer::WriterState ReceiverState;
 		TOptional<CrossServerEndpointReceiverACK> ReceiverACK;
 	};
 

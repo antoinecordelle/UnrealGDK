@@ -24,8 +24,7 @@ SpatialRPCService::SpatialRPCService(const FSubView& InActorAuthSubView, const F
 	, ClientServerRPCs(ExtractRPCDelegate::CreateRaw(this, &SpatialRPCService::ProcessOrQueueIncomingRPC), InActorAuthSubView, InNetDriver,
 					   RPCStore)
 	, MulticastRPCs(ExtractRPCDelegate::CreateRaw(this, &SpatialRPCService::ProcessOrQueueIncomingRPC), InActorNonAuthSubView, RPCStore)
-	, CrossServerRPCs(ExtractRPCDelegate::CreateRaw(this, &SpatialRPCService::ProcessOrQueueIncomingRPC), InActorAuthSubView, InNetDriver,
-					  RPCStore)
+	, CrossServerRPCs(ExtractRPCDelegate::CreateRaw(this, &SpatialRPCService::ProcessOrQueueIncomingRPC), InActorAuthSubView, RPCStore)
 	, AuthSubView(&InActorAuthSubView)
 	, LastProcessingTime(-GetDefault<USpatialGDKSettings>()->QueuedIncomingRPCRetryTime)
 {
@@ -46,6 +45,10 @@ void SpatialRPCService::ProcessChanges(const float NetDriverTime)
 {
 	ClientServerRPCs.ProcessChanges();
 	MulticastRPCs.ProcessChanges();
+	if (NetDriver->IsServer())
+	{
+		CrossServerRPCs.ProcessChanges();
+	}
 
 	if (NetDriverTime - LastProcessingTime > GetDefault<USpatialGDKSettings>()->QueuedIncomingRPCRetryTime)
 	{
@@ -228,7 +231,8 @@ TArray<FWorkerComponentData> SpatialRPCService::GetRPCComponentsOnEntityCreation
 {
 	static TArray<Worker_ComponentId> EndpointComponentIds = { SpatialConstants::CLIENT_ENDPOINT_COMPONENT_ID,
 															   SpatialConstants::SERVER_ENDPOINT_COMPONENT_ID,
-															   SpatialConstants::MULTICAST_RPCS_COMPONENT_ID };
+															   SpatialConstants::MULTICAST_RPCS_COMPONENT_ID,
+															   SpatialConstants::CROSSSERVER_SENDER_ENDPOINT_COMPONENT_ID };
 
 	TArray<FWorkerComponentData> Components;
 

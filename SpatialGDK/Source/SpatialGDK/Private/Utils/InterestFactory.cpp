@@ -154,8 +154,10 @@ Interest InterestFactory::CreateServerWorkerInterest(Worker_EntityId EntityId, c
 
 	// Add a self query to ensure we see the well known entity tag.
 	Query AuthoritySelfQuery = {};
-	AuthoritySelfQuery.ResultComponentIds = { SpatialConstants::GDK_KNOWN_ENTITY_TAG_COMPONENT_ID,
-											  SpatialConstants::CROSSSERVER_SENDER_ACK_ENDPOINT_COMPONENT_ID };
+	AuthoritySelfQuery.ResultComponentIds = {
+		SpatialConstants::GDK_KNOWN_ENTITY_TAG_COMPONENT_ID /*,
+		 SpatialConstants::CROSSSERVER_SENDER_ACK_ENDPOINT_COMPONENT_ID*/
+	};
 	AuthoritySelfQuery.Constraint.EntityIdConstraint = EntityId;
 	AddComponentQueryPairToInterestComponent(ServerInterest, SpatialConstants::SERVER_WORKER_COMPONENT_ID, AuthoritySelfQuery);
 

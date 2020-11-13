@@ -22,7 +22,22 @@
 
 #include "improbable/c_schema.h"
 
-#if 0
+#pragma optimize("", off)
+
+SpatialGDK::OwningComponentUpdatePtr FullyCopyComponentUpdate(Schema_ComponentUpdate* SrcUpdate)
+{
+	SpatialGDK::OwningComponentUpdatePtr Copy(Schema_CopyComponentUpdate(SrcUpdate));
+	uint32 ClearCount = Schema_GetComponentUpdateClearedFieldCount(SrcUpdate);
+	TArray<Schema_FieldId> ClearedFields;
+	ClearedFields.SetNum(ClearCount);
+	Schema_GetComponentUpdateClearedFieldList(SrcUpdate, ClearedFields.GetData());
+	for (uint32 i = 0; i < ClearCount; ++i)
+	{
+		Schema_AddComponentUpdateClearedField(Copy.Get(), ClearedFields[i]);
+	}
+
+	return MoveTemp(Copy);
+}
 
 class SpatialOSWorkerConnectionSpy : public SpatialOSWorkerInterface
 {
@@ -32,14 +47,21 @@ public:
 	virtual const TArray<SpatialGDK::EntityDelta>& GetEntityDeltas() override;
 	virtual const TArray<Worker_Op>& GetWorkerMessages() override;
 	virtual Worker_RequestId SendReserveEntityIdsRequest(uint32_t NumOfEntities) override;
-	virtual Worker_RequestId SendCreateEntityRequest(TArray<FWorkerComponentData> Components, const Worker_EntityId* EntityId) override;
-	virtual Worker_RequestId SendDeleteEntityRequest(Worker_EntityId EntityId) override;
-	virtual void SendAddComponent(Worker_EntityId EntityId, FWorkerComponentData* ComponentData) override;
-	virtual void SendRemoveComponent(Worker_EntityId EntityId, Worker_ComponentId ComponentId) override;
-	virtual void SendComponentUpdate(Worker_EntityId EntityId, FWorkerComponentUpdate* ComponentUpdate) override;
-	virtual Worker_RequestId SendCommandRequest(Worker_EntityId EntityId, Worker_CommandRequest* Request, uint32_t CommandId) override;
-	virtual void SendCommandResponse(Worker_RequestId RequestId, Worker_CommandResponse* Response) override;
-	virtual void SendCommandFailure(Worker_RequestId RequestId, const FString& Message) override;
+	virtual Worker_RequestId SendCreateEntityRequest(TArray<FWorkerComponentData> Components, const Worker_EntityId* EntityId,
+													 const TOptional<Trace_SpanId>& SpanId = {}) override;
+	virtual Worker_RequestId SendDeleteEntityRequest(Worker_EntityId EntityId, const TOptional<Trace_SpanId>& SpanId = {}) override;
+	virtual void SendAddComponent(Worker_EntityId EntityId, FWorkerComponentData* ComponentData,
+								  const TOptional<Trace_SpanId>& SpanId = {}) override;
+	virtual void SendRemoveComponent(Worker_EntityId EntityId, Worker_ComponentId ComponentId,
+									 const TOptional<Trace_SpanId>& SpanId = {}) override;
+	virtual void SendComponentUpdate(Worker_EntityId EntityId, FWorkerComponentUpdate* ComponentUpdate,
+									 const TOptional<Trace_SpanId>& SpanId = {}) override;
+	virtual Worker_RequestId SendCommandRequest(Worker_EntityId EntityId, Worker_CommandRequest* Request, uint32_t CommandId,
+												const TOptional<Trace_SpanId>& SpanId = {}) override;
+	virtual void SendCommandResponse(Worker_RequestId RequestId, Worker_CommandResponse* Response,
+									 const TOptional<Trace_SpanId>& SpanId = {}) override;
+	virtual void SendCommandFailure(Worker_RequestId RequestId, const FString& Message,
+									const TOptional<Trace_SpanId>& SpanId = {}) override;
 	virtual void SendLogMessage(uint8_t Level, const FName& LoggerName, const TCHAR* Message) override;
 	virtual void SendComponentInterest(Worker_EntityId EntityId, TArray<Worker_InterestOverride>&& ComponentInterest) override;
 	virtual Worker_RequestId SendEntityQueryRequest(const Worker_EntityQuery* EntityQuery) override;
@@ -51,8 +73,9 @@ public:
 
 	Worker_RequestId GetLastRequestId();
 
-	USpatialStaticComponentView* ComponentView;
-	TSet<TPair<Worker_EntityId_Key, Worker_ComponentId>> Updates;
+	SpatialGDK::ViewCoordinator* Coordinator;
+	SpatialGDK::EntityComponentOpListBuilder Builder;
+	bool bHadUpdates = false;
 
 private:
 	Worker_RequestId NextRequestId;
@@ -67,7 +90,6 @@ SpatialOSWorkerConnectionSpy::SpatialOSWorkerConnectionSpy()
 	: NextRequestId(0)
 	, LastEntityQuery(nullptr)
 {
-	ComponentView = NewObject<USpatialStaticComponentView>();
 }
 
 const TArray<SpatialGDK::EntityDelta>& SpatialOSWorkerConnectionSpy::GetEntityDeltas()
@@ -86,47 +108,68 @@ Worker_RequestId SpatialOSWorkerConnectionSpy::SendReserveEntityIdsRequest(uint3
 }
 
 Worker_RequestId SpatialOSWorkerConnectionSpy::SendCreateEntityRequest(TArray<FWorkerComponentData> Components,
-																	   const Worker_EntityId* EntityId)
+																	   const Worker_EntityId* EntityId,
+																	   const TOptional<Trace_SpanId>& SpanId)
 {
 	return NextRequestId++;
 }
 
-Worker_RequestId SpatialOSWorkerConnectionSpy::SendDeleteEntityRequest(Worker_EntityId EntityId)
+Worker_RequestId SpatialOSWorkerConnectionSpy::SendDeleteEntityRequest(Worker_EntityId EntityId, const TOptional<Trace_SpanId>& SpanId)
 {
-	ComponentView->OnRemoveEntity(EntityId);
+	if (Coordinator)
+	{
+		Coordinator->SendDeleteEntityRequest(EntityId);
+	}
+	Builder.RemoveEntity(EntityId);
 	return NextRequestId++;
 }
 
-void SpatialOSWorkerConnectionSpy::SendAddComponent(Worker_EntityId EntityId, FWorkerComponentData* ComponentData) {}
-
-void SpatialOSWorkerConnectionSpy::SendRemoveComponent(Worker_EntityId EntityId, Worker_ComponentId ComponentId)
+void SpatialOSWorkerConnectionSpy::SendAddComponent(Worker_EntityId EntityId, FWorkerComponentData* ComponentData,
+													const TOptional<Trace_SpanId>& SpanId)
 {
-	Worker_RemoveComponentOp Op;
-	Op.entity_id = EntityId;
-	Op.component_id = ComponentId;
-	ComponentView->OnRemoveComponent(Op);
 }
 
-void SpatialOSWorkerConnectionSpy::SendComponentUpdate(Worker_EntityId EntityId, FWorkerComponentUpdate* ComponentUpdate)
+void SpatialOSWorkerConnectionSpy::SendRemoveComponent(Worker_EntityId EntityId, Worker_ComponentId ComponentId,
+													   const TOptional<Trace_SpanId>& SpanId)
 {
-	Worker_ComponentUpdateOp Update;
-	Update.entity_id = EntityId;
-	Update.update.component_id = ComponentUpdate->component_id;
-	Update.update.schema_type = ComponentUpdate->schema_type;
-	ComponentView->OnComponentUpdate(Update);
+	if (Coordinator)
+	{
+		Coordinator->SendRemoveComponent(EntityId, ComponentId, SpanId);
+	}
+	Builder.RemoveComponent(EntityId, ComponentId);
+}
 
-	Updates.Add(MakeTuple(EntityId, ComponentUpdate->component_id));
+void SpatialOSWorkerConnectionSpy::SendComponentUpdate(Worker_EntityId EntityId, FWorkerComponentUpdate* ComponentUpdate,
+													   const TOptional<Trace_SpanId>& SpanId)
+{
+	bHadUpdates = true;
+
+	SpatialGDK::OwningComponentUpdatePtr UpdateData(ComponentUpdate->schema_type);
+	if (Coordinator)
+	{
+		SpatialGDK::OwningComponentUpdatePtr UpdateDataCopy = FullyCopyComponentUpdate(ComponentUpdate->schema_type);
+
+		Coordinator->SendComponentUpdate(EntityId, SpatialGDK::ComponentUpdate(MoveTemp(UpdateDataCopy), ComponentUpdate->component_id),
+										 SpanId);
+	}
+	Builder.UpdateComponent(EntityId, SpatialGDK::ComponentUpdate(MoveTemp(UpdateData), ComponentUpdate->component_id));
 }
 
 Worker_RequestId SpatialOSWorkerConnectionSpy::SendCommandRequest(Worker_EntityId EntityId, Worker_CommandRequest* Request,
-																  uint32_t CommandId)
+																  uint32_t CommandId, const TOptional<Trace_SpanId>& SpanId)
 {
 	return NextRequestId++;
 }
 
-void SpatialOSWorkerConnectionSpy::SendCommandResponse(Worker_RequestId RequestId, Worker_CommandResponse* Response) {}
+void SpatialOSWorkerConnectionSpy::SendCommandResponse(Worker_RequestId RequestId, Worker_CommandResponse* Response,
+													   const TOptional<Trace_SpanId>& SpanId)
+{
+}
 
-void SpatialOSWorkerConnectionSpy::SendCommandFailure(Worker_RequestId RequestId, const FString& Message) {}
+void SpatialOSWorkerConnectionSpy::SendCommandFailure(Worker_RequestId RequestId, const FString& Message,
+													  const TOptional<Trace_SpanId>& SpanId)
+{
+}
 
 void SpatialOSWorkerConnectionSpy::SendLogMessage(uint8_t Level, const FName& LoggerName, const TCHAR* Message) {}
 
@@ -161,7 +204,18 @@ namespace SpatialGDK
 class ConnectionHandlerStub : public AbstractConnectionHandler
 {
 public:
+	void SetFromBuilder(EntityComponentOpListBuilder& Builder)
+	{
+		check(!HasNextOpList());
+		TArray<TArray<OpList>> NewListsOfOpLists;
+		TArray<OpList> OpLists;
+		OpLists.Add(Builder.Move().CreateOpList());
+		NewListsOfOpLists.Add(MoveTemp(OpLists));
+		SetListsOfOpLists(MoveTemp(NewListsOfOpLists));
+	}
 	void SetListsOfOpLists(TArray<TArray<OpList>> List) { ListsOfOpLists = MoveTemp(List); }
+
+	bool HasNextOpList() { return ListsOfOpLists.Num() > 0; }
 
 	virtual void Advance() override
 	{
@@ -199,132 +253,45 @@ void AddEntityAndCrossServerComponents(EntityComponentOpListBuilder& Builder, Wo
 	Builder.AddComponent(Id, ComponentData{ SpatialConstants::CROSSSERVER_RECEIVER_ENDPOINT_COMPONENT_ID });
 	Builder.AddComponent(Id, ComponentData{ SpatialConstants::CROSSSERVER_RECEIVER_ACK_ENDPOINT_COMPONENT_ID });
 	Builder.AddComponent(Id, ComponentData{ SpatialConstants::ROUTINGWORKER_TAG_COMPONENT_ID });
+	Builder.AddComponent(Id, ComponentData{ SpatialConstants::ACTOR_AUTH_TAG_COMPONENT_ID });
+}
 
+void AddComponentAuthForRoutingWorker(EntityComponentOpListBuilder& Builder, Worker_EntityId Id)
+{
 	Builder.SetAuthority(Id, SpatialConstants::CROSSSERVER_SENDER_ENDPOINT_COMPONENT_ID, WORKER_AUTHORITY_NOT_AUTHORITATIVE);
 	Builder.SetAuthority(Id, SpatialConstants::CROSSSERVER_SENDER_ACK_ENDPOINT_COMPONENT_ID, WORKER_AUTHORITY_AUTHORITATIVE);
 	Builder.SetAuthority(Id, SpatialConstants::CROSSSERVER_RECEIVER_ENDPOINT_COMPONENT_ID, WORKER_AUTHORITY_AUTHORITATIVE);
 	Builder.SetAuthority(Id, SpatialConstants::CROSSSERVER_RECEIVER_ACK_ENDPOINT_COMPONENT_ID, WORKER_AUTHORITY_NOT_AUTHORITATIVE);
 	Builder.SetAuthority(Id, SpatialConstants::ROUTINGWORKER_TAG_COMPONENT_ID, WORKER_AUTHORITY_NOT_AUTHORITATIVE);
+	Builder.SetAuthority(Id, SpatialConstants::ACTOR_AUTH_TAG_COMPONENT_ID, WORKER_AUTHORITY_NOT_AUTHORITATIVE);
 }
 
-void AddEntityAndCrossServerComponents(USpatialStaticComponentView& View, Worker_EntityId Id)
+void AddComponentAuthForServerWorker(EntityComponentOpListBuilder& Builder, Worker_EntityId Id)
 {
-	Worker_AddComponentOp Op;
-	Op.entity_id = Id;
-	Op.data.schema_type = Schema_CreateComponentData();
-
-	Op.data.component_id = SpatialConstants::CROSSSERVER_SENDER_ENDPOINT_COMPONENT_ID;
-	View.OnAddComponent(Op);
-
-	Op.data.component_id = SpatialConstants::CROSSSERVER_SENDER_ACK_ENDPOINT_COMPONENT_ID;
-	View.OnAddComponent(Op);
-
-	Op.data.component_id = SpatialConstants::CROSSSERVER_RECEIVER_ENDPOINT_COMPONENT_ID;
-	View.OnAddComponent(Op);
-
-	Op.data.component_id = SpatialConstants::CROSSSERVER_RECEIVER_ACK_ENDPOINT_COMPONENT_ID;
-	View.OnAddComponent(Op);
-
-	Worker_AuthorityChangeOp AuthOp;
-	AuthOp.entity_id = Id;
-	AuthOp.authority = WORKER_AUTHORITY_AUTHORITATIVE;
-
-	AuthOp.component_id = SpatialConstants::CROSSSERVER_SENDER_ENDPOINT_COMPONENT_ID;
-	View.OnAuthorityChange(AuthOp);
-
-	AuthOp.component_id = SpatialConstants::CROSSSERVER_RECEIVER_ACK_ENDPOINT_COMPONENT_ID;
-	View.OnAuthorityChange(AuthOp);
-
-	AuthOp.authority = WORKER_AUTHORITY_NOT_AUTHORITATIVE;
-	AuthOp.component_id = SpatialConstants::CROSSSERVER_SENDER_ACK_ENDPOINT_COMPONENT_ID;
-	View.OnAuthorityChange(AuthOp);
-
-	AuthOp.component_id = SpatialConstants::CROSSSERVER_RECEIVER_ENDPOINT_COMPONENT_ID;
-	View.OnAuthorityChange(AuthOp);
+	Builder.SetAuthority(Id, SpatialConstants::CROSSSERVER_SENDER_ENDPOINT_COMPONENT_ID, WORKER_AUTHORITY_AUTHORITATIVE);
+	Builder.SetAuthority(Id, SpatialConstants::CROSSSERVER_SENDER_ACK_ENDPOINT_COMPONENT_ID, WORKER_AUTHORITY_NOT_AUTHORITATIVE);
+	Builder.SetAuthority(Id, SpatialConstants::CROSSSERVER_RECEIVER_ENDPOINT_COMPONENT_ID, WORKER_AUTHORITY_NOT_AUTHORITATIVE);
+	Builder.SetAuthority(Id, SpatialConstants::CROSSSERVER_RECEIVER_ACK_ENDPOINT_COMPONENT_ID, WORKER_AUTHORITY_AUTHORITATIVE);
+	Builder.SetAuthority(Id, SpatialConstants::ROUTINGWORKER_TAG_COMPONENT_ID, WORKER_AUTHORITY_NOT_AUTHORITATIVE);
+	Builder.SetAuthority(Id, SpatialConstants::ACTOR_AUTH_TAG_COMPONENT_ID, WORKER_AUTHORITY_NOT_AUTHORITATIVE);
 }
 
-void RemoveEntityAndCrossServerComponents(EntityComponentOpListBuilder& Builder, Worker_EntityId Id)
+void RemoveEntityAndCrossServerComponents(ViewCoordinator& Coordinator, EntityComponentOpListBuilder& Builder, Worker_EntityId Id)
 {
-	// Builder.SetAuthority(Id, SpatialConstants::CROSSSERVER_SENDER_ACK_ENDPOINT_COMPONENT_ID, WORKER_AUTHORITY_NOT_AUTHORITATIVE);
-	// Builder.SetAuthority(Id, SpatialConstants::CROSSSERVER_RECEIVER_ENDPOINT_COMPONENT_ID, WORKER_AUTHORITY_NOT_AUTHORITATIVE);
-
+	Coordinator.SendRemoveComponent(Id, SpatialConstants::CROSSSERVER_SENDER_ENDPOINT_COMPONENT_ID, {});
 	Builder.RemoveComponent(Id, SpatialConstants::CROSSSERVER_SENDER_ENDPOINT_COMPONENT_ID);
+	Coordinator.SendRemoveComponent(Id, SpatialConstants::CROSSSERVER_SENDER_ACK_ENDPOINT_COMPONENT_ID, {});
 	Builder.RemoveComponent(Id, SpatialConstants::CROSSSERVER_SENDER_ACK_ENDPOINT_COMPONENT_ID);
+	Coordinator.SendRemoveComponent(Id, SpatialConstants::CROSSSERVER_RECEIVER_ENDPOINT_COMPONENT_ID, {});
 	Builder.RemoveComponent(Id, SpatialConstants::CROSSSERVER_RECEIVER_ENDPOINT_COMPONENT_ID);
+	Coordinator.SendRemoveComponent(Id, SpatialConstants::CROSSSERVER_RECEIVER_ACK_ENDPOINT_COMPONENT_ID, {});
 	Builder.RemoveComponent(Id, SpatialConstants::CROSSSERVER_RECEIVER_ACK_ENDPOINT_COMPONENT_ID);
+	Coordinator.SendRemoveComponent(Id, SpatialConstants::ROUTINGWORKER_TAG_COMPONENT_ID, {});
 	Builder.RemoveComponent(Id, SpatialConstants::ROUTINGWORKER_TAG_COMPONENT_ID);
+	Coordinator.SendRemoveComponent(Id, SpatialConstants::ACTOR_AUTH_TAG_COMPONENT_ID, {});
+	Builder.RemoveComponent(Id, SpatialConstants::ACTOR_AUTH_TAG_COMPONENT_ID);
+	Coordinator.SendDeleteEntityRequest(Id);
 	Builder.RemoveEntity(Id);
-}
-
-void RemoveEntityAndCrossServerComponents(SpatialOSWorkerConnectionSpy& Connection, Worker_EntityId Id)
-{
-	Connection.SendRemoveComponent(Id, SpatialConstants::CROSSSERVER_SENDER_ENDPOINT_COMPONENT_ID);
-	Connection.SendRemoveComponent(Id, SpatialConstants::CROSSSERVER_SENDER_ACK_ENDPOINT_COMPONENT_ID);
-	Connection.SendRemoveComponent(Id, SpatialConstants::CROSSSERVER_RECEIVER_ENDPOINT_COMPONENT_ID);
-	Connection.SendRemoveComponent(Id, SpatialConstants::CROSSSERVER_RECEIVER_ACK_ENDPOINT_COMPONENT_ID);
-	Connection.SendRemoveComponent(Id, SpatialConstants::ROUTINGWORKER_TAG_COMPONENT_ID);
-	Connection.SendDeleteEntityRequest(Id);
-
-	for (auto Iterator = Connection.Updates.CreateIterator(); Iterator; ++Iterator)
-	{
-		if (Iterator->Key == Id)
-		{
-			Iterator.RemoveCurrent();
-		}
-	}
-}
-
-bool ExtractUpdatesFromRPCService(ConnectionHandlerStub& Stub, SpatialGDK::SpatialRPCService& RPCService)
-{
-	bool bHadUpdates = false;
-	EntityComponentOpListBuilder Builder;
-	TArray<TArray<OpList>> ListsOfOpLists;
-	TArray<OpList> OpLists;
-
-	auto ListOfUpdates = RPCService.GetRPCsAndAcksToSend();
-
-	for (const auto& Update : ListOfUpdates)
-	{
-		Builder.UpdateComponent(Update.EntityId,
-								ComponentUpdate(OwningComponentUpdatePtr(Update.Update.schema_type), Update.Update.component_id));
-		bHadUpdates = true;
-	}
-
-	OpLists.Add(MoveTemp(Builder).CreateOpList());
-	ListsOfOpLists.Add(MoveTemp(OpLists));
-	Stub.SetListsOfOpLists(MoveTemp(ListsOfOpLists));
-
-	return bHadUpdates;
-}
-
-bool ProcessRPCUpdates(TSet<TPair<Worker_EntityId_Key, Worker_ComponentId>>& Updates, SpatialGDK::SpatialRPCService& RPCService,
-					   TSet<Worker_EntityId_Key> FilterUpdates = TSet<Worker_EntityId_Key>())
-{
-	bool bHadUpdates = false;
-	for (const auto& Update : Updates)
-	{
-		if (FilterUpdates.Num() != 0 && !FilterUpdates.Contains(Update.Get<0>()))
-		{
-			continue;
-		}
-
-		switch (Update.Get<1>())
-		{
-		case SpatialConstants::CROSSSERVER_RECEIVER_ENDPOINT_COMPONENT_ID:
-			RPCService.ExtractRPCsForEntity(Update.Get<0>(), Update.Get<1>());
-			bHadUpdates = true;
-			break;
-		case SpatialConstants::CROSSSERVER_SENDER_ACK_ENDPOINT_COMPONENT_ID:
-			RPCService.UpdateMergedACKs(Update.Get<0>());
-			bHadUpdates = true;
-			break;
-		default:
-			checkNoEntry();
-		}
-	}
-	Updates.Empty();
-
-	return bHadUpdates;
 }
 
 struct RPCToSend
@@ -343,12 +310,29 @@ struct RPCToSend
 
 struct Components
 {
-	Components(Worker_EntityId Entity, USpatialStaticComponentView* View)
+	Components(Worker_EntityId Entity, const SpatialGDK::EntityView& View)
 	{
-		Sender = View->GetComponentData<CrossServerEndpointSender>(Entity);
-		Receiver = View->GetComponentData<CrossServerEndpointReceiver>(Entity);
-		SenderACK = View->GetComponentData<CrossServerEndpointSenderACK>(Entity);
-		ReceiverACK = View->GetComponentData<CrossServerEndpointReceiverACK>(Entity);
+		const SpatialGDK::EntityViewElement& Element = View.FindChecked(Entity);
+
+		for (auto& Data : Element.Components)
+		{
+			if (Data.GetComponentId() == SpatialConstants::CROSSSERVER_SENDER_ENDPOINT_COMPONENT_ID)
+			{
+				Sender.Emplace(CrossServerEndpointSender(Data.GetUnderlying()));
+			}
+			if (Data.GetComponentId() == SpatialConstants::CROSSSERVER_SENDER_ACK_ENDPOINT_COMPONENT_ID)
+			{
+				SenderACK.Emplace(CrossServerEndpointSenderACK(Data.GetUnderlying()));
+			}
+			if (Data.GetComponentId() == SpatialConstants::CROSSSERVER_RECEIVER_ENDPOINT_COMPONENT_ID)
+			{
+				Receiver.Emplace(CrossServerEndpointReceiver(Data.GetUnderlying()));
+			}
+			if (Data.GetComponentId() == SpatialConstants::CROSSSERVER_RECEIVER_ACK_ENDPOINT_COMPONENT_ID)
+			{
+				ReceiverACK.Emplace(CrossServerEndpointReceiverACK(Data.GetUnderlying()));
+			}
+		}
 	}
 
 	bool CheckSettled()
@@ -384,50 +368,235 @@ struct Components
 		return true;
 	}
 
-	CrossServerEndpointSender* Sender;
-	CrossServerEndpointReceiver* Receiver;
-	CrossServerEndpointSenderACK* SenderACK;
-	CrossServerEndpointReceiverACK* ReceiverACK;
+	TOptional<CrossServerEndpointSender> Sender;
+	TOptional<CrossServerEndpointReceiver> Receiver;
+	TOptional<CrossServerEndpointSenderACK> SenderACK;
+	TOptional<CrossServerEndpointReceiverACK> ReceiverACK;
 };
 
 struct TestRoutingFixture
 {
 	TestRoutingFixture()
-		: Handler(MakeUnique<ConnectionHandlerStub>())
-		, Stub(Handler.Get())
-		, Coordinator(MoveTemp(Handler))
-		, RoutingSystem(Coordinator.CreateSubView(SpatialConstants::ROUTINGWORKER_TAG_COMPONENT_ID,
-												  [](const Worker_EntityId, const SpatialGDK::EntityViewElement&) {
-													  return true;
-												  },
-												  {}),
+		: HandlerRoutingWorker(MakeUnique<ConnectionHandlerStub>())
+		, HandlerServerWorker(MakeUnique<ConnectionHandlerStub>())
+		, RoutingWorkerStub(HandlerRoutingWorker.Get())
+		, ServerWorkerStub(HandlerServerWorker.Get())
+		, CoordinatorRoutingWorker(MoveTemp(HandlerRoutingWorker), nullptr)
+		, CoordinatorServerWorker(MoveTemp(HandlerServerWorker), nullptr)
+		, RoutingSystem(CoordinatorRoutingWorker.CreateSubView(SpatialConstants::ROUTINGWORKER_TAG_COMPONENT_ID,
+															   [](const Worker_EntityId, const SpatialGDK::EntityViewElement&) {
+																   return true;
+															   },
+															   {}),
 						TEXT(""))
+		, ServerWorkerSubView(CoordinatorServerWorker.CreateSubView(SpatialConstants::ACTOR_AUTH_TAG_COMPONENT_ID,
+																	[](const Worker_EntityId, const SpatialGDK::EntityViewElement&) {
+																		return true;
+																	},
+																	{}))
 	{
+		Spy.Coordinator = &CoordinatorRoutingWorker;
 	}
 
-	bool Step()
+	void Init(const TArray<Worker_EntityId>& Entities)
 	{
-		Coordinator.Advance();
+		{
+			EntityComponentOpListBuilder Builder;
+			for (auto Entity : Entities)
+			{
+				AddEntityAndCrossServerComponents(Builder, Entity);
+				AddComponentAuthForRoutingWorker(Builder, Entity);
+			}
+			RoutingWorkerStub->SetFromBuilder(Builder);
+		}
+		StepRoutingWorker();
 
+		{
+			EntityComponentOpListBuilder Builder;
+			for (auto Entity : Entities)
+			{
+				AddEntityAndCrossServerComponents(Builder, Entity);
+				AddComponentAuthForServerWorker(Builder, Entity);
+			}
+			ServerWorkerStub->SetFromBuilder(Builder);
+		}
+
+		CoordinatorServerWorker.Advance(0.0);
+	}
+
+	bool StepRoutingWorker()
+	{
+		if (!RoutingWorkerStub->HasNextOpList())
+		{
+			return false;
+		}
+
+		CoordinatorRoutingWorker.Advance(0.0);
+
+		Spy.bHadUpdates = false;
 		RoutingSystem.Advance(&Spy);
 		RoutingSystem.Flush(&Spy);
 
-		return Spy.Updates.Num() > 0;
+		if (ExtractUpdatesFromConnectionSpy())
+		{
+			CoordinatorServerWorker.Advance(0.0);
+		}
+
+		return Spy.bHadUpdates;
+	}
+
+	bool ExtractUpdatesFromConnectionSpy()
+	{
+		ServerWorkerStub->SetFromBuilder(Spy.Builder);
+		return ServerWorkerStub->HasNextOpList();
+	}
+
+	bool ExtractUpdatesFromRPCStore(CrossServerRPCService& RPCService, FRPCStore& RPCUpdates)
+	{
+		RPCService.FlushPendingClearedFields();
+
+		bool bHadUpdates = RPCUpdates.PendingComponentUpdatesToSend.Num() > 0;
+		EntityComponentOpListBuilder Builder;
+
+		for (const auto& Update : RPCUpdates.PendingComponentUpdatesToSend)
+		{
+			SpatialGDK::OwningComponentUpdatePtr UpdateData(Update.Value.Update);
+			SpatialGDK::OwningComponentUpdatePtr UpdateDataCopy = FullyCopyComponentUpdate(Update.Value.Update);
+
+			CoordinatorServerWorker.SendComponentUpdate(
+				Update.Key.EntityId, SpatialGDK::ComponentUpdate(SpatialGDK::ComponentUpdate(MoveTemp(UpdateData), Update.Key.ComponentId)),
+				{});
+			Builder.UpdateComponent(Update.Key.EntityId, SpatialGDK::ComponentUpdate(MoveTemp(UpdateDataCopy), Update.Key.ComponentId));
+		}
+		RPCUpdates.PendingComponentUpdatesToSend.Empty();
+
+		if (bHadUpdates)
+		{
+			RoutingWorkerStub->SetFromBuilder(Builder);
+		}
+
+		return bHadUpdates;
 	}
 
 private:
-	TUniquePtr<ConnectionHandlerStub> Handler;
+	TUniquePtr<ConnectionHandlerStub> HandlerRoutingWorker;
+	TUniquePtr<ConnectionHandlerStub> HandlerServerWorker;
 
 public:
-	ConnectionHandlerStub* Stub;
-	ViewCoordinator Coordinator;
-
+	ConnectionHandlerStub* RoutingWorkerStub;
+	ConnectionHandlerStub* ServerWorkerStub;
+	ViewCoordinator CoordinatorRoutingWorker;
+	ViewCoordinator CoordinatorServerWorker;
 	SpatialGDK::SpatialRoutingSystem RoutingSystem;
+	SpatialGDK::FSubView& ServerWorkerSubView;
 
 	SpatialOSWorkerConnectionSpy Spy;
 };
 
-ROUTING_SERVICE_TEST(TestRouting_BasicOp)
+ROUTING_SERVICE_TEST(TestRoutingWorker_WhiteBox_SendOneMessage)
+{
+	TArray<Worker_EntityId> Entities;
+	for (uint32 i = 0; i < 2; ++i)
+	{
+		Entities.Add((i + 1) * 10);
+	}
+
+	TestRoutingFixture TestFixture;
+	TestFixture.Init(Entities);
+
+	Worker_EntityId Entity1 = Entities[0];
+	Worker_EntityId Entity2 = Entities[1];
+
+	RPCPayload Payload(0, 1337, TArray<uint8>());
+
+	SpatialGDK::CrossServerRPCService* RPCServiceBackptr = nullptr;
+
+	TSet<TPair<Worker_EntityId, uint32>> ExpectedRPCs = { MakeTuple(Entity2, 1337u) };
+
+	auto ExtractRPCCallback = [this, &ExpectedRPCs, &RPCServiceBackptr](const FUnrealObjectRef& Target, const RPCSender& Sender,
+																		SpatialGDK::RPCPayload Payload) {
+		int32 NumRemoved = ExpectedRPCs.Remove(MakeTuple(Target.Entity, Payload.Index));
+		FString DebugText = FString::Printf(TEXT("RPC %i from %llu to %llu was unexpected"), Payload.Index, Sender.Entity, Target.Entity);
+		TestTrue(*DebugText, NumRemoved > 0);
+
+		RPCServiceBackptr->WriteCrossServerACKFor(Target.Entity, Sender);
+	};
+
+	SpatialGDK::FRPCStore RPCStore;
+	SpatialGDK::CrossServerRPCService RPCService(ExtractRPCDelegate::CreateLambda(ExtractRPCCallback), TestFixture.ServerWorkerSubView,
+												 RPCStore);
+
+	RPCServiceBackptr = &RPCService;
+	RPCService.AdvanceView();
+	RPCService.ProcessChanges();
+
+	RPCService.PushCrossServerRPC(Entity2, RPCSender(Entity1, 0), Payload, false);
+	TestFixture.ExtractUpdatesFromRPCStore(RPCService, RPCStore);
+
+	TestFixture.StepRoutingWorker();
+
+	{
+		Components Entity2Comps(Entity2, TestFixture.CoordinatorServerWorker.GetView());
+
+		TestTrue(TEXT("SentRPC"), Entity2Comps.Receiver->ReliableRPCBuffer.Counterpart.Num() > 0);
+		TestTrue(TEXT("SentRPC"), Entity2Comps.Receiver->ReliableRPCBuffer.Counterpart[0].IsSet());
+		const CrossServerRPCInfo& SenderBackRef = Entity2Comps.Receiver->ReliableRPCBuffer.Counterpart[0].GetValue();
+		TestTrue(TEXT("SentRPC"), SenderBackRef.Entity == Entity1);
+	}
+
+	RPCService.AdvanceView();
+	RPCService.ProcessChanges();
+
+	TestTrue(TEXT("ReceivedRPC"), ExpectedRPCs.Num() == 0);
+
+	TestFixture.ExtractUpdatesFromRPCStore(RPCService, RPCStore);
+	TestFixture.StepRoutingWorker();
+
+	{
+		Components Entity1Comps(Entity1, TestFixture.CoordinatorServerWorker.GetView());
+
+		TestTrue(TEXT("ACKWritten"), Entity1Comps.SenderACK->ACKArray.Num() > 0);
+		TestTrue(TEXT("ACKWritten"), Entity1Comps.SenderACK->ACKArray[0].IsSet());
+		const ACKItem& ACK = Entity1Comps.SenderACK->ACKArray[0].GetValue();
+		TestTrue(TEXT("ACKWritten"), ACK.Sender == Entity1);
+	}
+
+	RPCService.AdvanceView();
+	RPCService.ProcessChanges();
+	TestFixture.ExtractUpdatesFromRPCStore(RPCService, RPCStore);
+	TestFixture.StepRoutingWorker();
+
+	{
+		Components Entity1Comps(Entity1, TestFixture.CoordinatorServerWorker.GetView());
+		Components Entity2Comps(Entity2, TestFixture.CoordinatorServerWorker.GetView());
+		for (auto& Slot : Entity1Comps.SenderACK->ACKArray)
+		{
+			TestTrue(TEXT("SenderACK cleanued up"), !Slot.IsSet());
+		}
+
+		for (auto& Slot : Entity2Comps.Receiver->ReliableRPCBuffer.Counterpart)
+		{
+			TestTrue(TEXT("Receiver cleaned up"), !Slot.IsSet());
+		}
+	}
+
+	RPCService.AdvanceView();
+	RPCService.ProcessChanges();
+	TestFixture.ExtractUpdatesFromRPCStore(RPCService, RPCStore);
+	TestFixture.StepRoutingWorker();
+
+	{
+		Components Entity2Comps(Entity2, TestFixture.CoordinatorServerWorker.GetView());
+		for (auto& Slot : Entity2Comps.ReceiverACK->ACKArray)
+		{
+			TestTrue(TEXT("Receiver ACK cleaned up"), !Slot.IsSet());
+		}
+	}
+
+	return true;
+}
+
+ROUTING_SERVICE_TEST(TestRoutingWorker_BlackBox_SendSeveralMessagesToSeveralEntities)
 {
 	TArray<Worker_EntityId> Entities;
 	for (uint32 i = 0; i < 4; ++i)
@@ -435,109 +604,26 @@ ROUTING_SERVICE_TEST(TestRouting_BasicOp)
 		Entities.Add((i + 1) * 10);
 	}
 
-	TArray<TArray<OpList>> ListsOfOpLists;
-	{
-		TArray<OpList> OpLists;
-		EntityComponentOpListBuilder Builder;
-		for (auto Entity : Entities)
-		{
-			AddEntityAndCrossServerComponents(Builder, Entity);
-		}
-		OpLists.Add(MoveTemp(Builder).CreateOpList());
-		ListsOfOpLists.Add(MoveTemp(OpLists));
-	}
-
 	TestRoutingFixture TestFixture;
+	TestFixture.Init(Entities);
 
-	SpatialOSWorkerConnectionSpy& Spy = TestFixture.Spy;
-	ConnectionHandlerStub* Stub = TestFixture.Stub;
-	Stub->SetListsOfOpLists(MoveTemp(ListsOfOpLists));
-	TestFixture.Step();
+	SpatialGDK::CrossServerRPCService* RPCServiceBackptr = nullptr;
 
-	for (auto Entity : Entities)
-	{
-		AddEntityAndCrossServerComponents(*Spy.ComponentView, Entity);
-	}
+	TSet<TPair<Worker_EntityId, uint32>> ExpectedRPCs;
 
-	Worker_EntityId Entity1 = Entities[0];
-	Worker_EntityId Entity2 = Entities[1];
-
-	CrossServerEndpointReceiver& Receiver2 = *Spy.ComponentView->GetComponentData<CrossServerEndpointReceiver>(Entity2);
-	CrossServerEndpointSenderACK& SenderACK1 = *Spy.ComponentView->GetComponentData<CrossServerEndpointSenderACK>(Entity1);
-	CrossServerEndpointReceiverACK& ReceiverACK2 = *Spy.ComponentView->GetComponentData<CrossServerEndpointReceiverACK>(Entity2);
-
-	RPCPayload Payload(0, 1337, TArray<uint8>());
-
-	SpatialGDK::SpatialRPCService* RPCServiceBackptr = nullptr;
-
-	TSet<TPair<Worker_EntityId, uint32>> ExpectedRPCs = { MakeTuple(Entity2, 1337u) };
-
-	auto ExtractRPCCallback = [this, &ExpectedRPCs, &RPCServiceBackptr](Worker_EntityId Target, const FUnrealObjectRef& SenderRef,
-																		ERPCType Type, const SpatialGDK::RPCPayload& Payload,
-																		uint64 SenderRev) {
-		int32 NumRemoved = ExpectedRPCs.Remove(MakeTuple(Target, Payload.Index));
-		FString DebugText = FString::Printf(TEXT("RPC %i from %llu to %llu was unexpected"), Payload.Index, SenderRef.Entity, Target);
+	auto ExtractRPCCallback = [this, &ExpectedRPCs, &RPCServiceBackptr](const FUnrealObjectRef& Target, const RPCSender& Sender,
+																		SpatialGDK::RPCPayload Payload) {
+		int32 NumRemoved = ExpectedRPCs.Remove(MakeTuple(Target.Entity, Payload.Index));
+		FString DebugText = FString::Printf(TEXT("RPC %i from %llu to %llu was unexpected"), Payload.Index, Sender.Entity, Target.Entity);
 		TestTrue(*DebugText, NumRemoved > 0);
 
-		RPCServiceBackptr->WriteCrossServerACKFor(Target, SenderRef.Entity, SenderRef.Offset, SenderRev, Type);
-		return true;
+		RPCServiceBackptr->WriteCrossServerACKFor(Target.Entity, Sender);
 	};
 
-	SpatialGDK::SpatialRPCService RPCService(ExtractRPCDelegate::CreateLambda(ExtractRPCCallback), Spy.ComponentView, nullptr);
+	SpatialGDK::FRPCStore RPCStore;
+	SpatialGDK::CrossServerRPCService RPCService(ExtractRPCDelegate::CreateLambda(ExtractRPCCallback), TestFixture.ServerWorkerSubView,
+												 RPCStore);
 	RPCServiceBackptr = &RPCService;
-	for (auto Entity : Entities)
-	{
-		RPCService.OnEndpointAuthorityGained(Entity, SpatialConstants::CROSSSERVER_SENDER_ENDPOINT_COMPONENT_ID);
-		RPCService.OnEndpointAuthorityGained(Entity, SpatialConstants::CROSSSERVER_RECEIVER_ACK_ENDPOINT_COMPONENT_ID);
-	}
-
-	RPCService.PushRPC(Entity1, FUnrealObjectRef(Entity2, 0), ERPCType::CrossServerSender, Payload, false);
-	ExtractUpdatesFromRPCService(*Stub, RPCService);
-
-	TestFixture.Step();
-
-	TestTrue(TEXT("SentRPC"), Receiver2.ReliableRPCBuffer.Counterpart.Num() > 0);
-	TestTrue(TEXT("SentRPC"), Receiver2.ReliableRPCBuffer.Counterpart[0].IsSet());
-	const FUnrealObjectRef& SenderBackRef = Receiver2.ReliableRPCBuffer.Counterpart[0].GetValue();
-	TestTrue(TEXT("SentRPC"), SenderBackRef.Entity == Entity1);
-
-	ProcessRPCUpdates(Spy.Updates, RPCService);
-
-	TestTrue(TEXT("ReceivedRPC"), ExpectedRPCs.Num() == 0);
-
-	ExtractUpdatesFromRPCService(*Stub, RPCService);
-
-	TestFixture.Step();
-
-	TestTrue(TEXT("ACKWritten"), SenderACK1.ACKArray.Num() > 0);
-	TestTrue(TEXT("ACKWritten"), SenderACK1.ACKArray[0].IsSet());
-	const ACKItem& ACK = SenderACK1.ACKArray[0].GetValue();
-	TestTrue(TEXT("ACKWritten"), ACK.Sender == Entity1);
-
-	ProcessRPCUpdates(Spy.Updates, RPCService);
-	ExtractUpdatesFromRPCService(*Stub, RPCService);
-
-	TestFixture.Step();
-
-	for (auto& Slot : SenderACK1.ACKArray)
-	{
-		TestTrue(TEXT("SenderACK cleanued up"), !Slot.IsSet());
-	}
-
-	for (auto& Slot : Receiver2.ReliableRPCBuffer.Counterpart)
-	{
-		TestTrue(TEXT("Receiver cleaned up"), !Slot.IsSet());
-	}
-
-	ProcessRPCUpdates(Spy.Updates, RPCService);
-	ExtractUpdatesFromRPCService(*Stub, RPCService);
-
-	TestFixture.Step();
-
-	for (auto& Slot : ReceiverACK2.ACKArray)
-	{
-		TestTrue(TEXT("Receiver ACK cleaned up"), !Slot.IsSet());
-	}
 
 	TArray<RPCToSend> RPCs;
 	uint32 RPCId = 1;
@@ -559,36 +645,37 @@ ROUTING_SERVICE_TEST(TestRouting_BasicOp)
 	bool bHasProcessedMessages = true;
 	while (RPCs.Num() != 0 || bHasProcessedMessages)
 	{
+		RPCService.AdvanceView();
+		RPCService.ProcessChanges();
+
 		if (RPCs.Num() > 0)
 		{
 			RPCToSend RPC = RPCs.Last();
 			RPCPayload DummyPayload(0, RPC.PayloadId, TArray<uint8>());
-			if (RPCService.PushRPC(RPC.Sender, FUnrealObjectRef(RPC.Target, 0), ERPCType::CrossServerSender, DummyPayload, false)
-				== EPushRPCResult::Success)
+			if (RPCService.PushCrossServerRPC(RPC.Target, RPCSender(RPC.Sender, 0), DummyPayload, false) == EPushRPCResult::Success)
 			{
 				RPCs.Pop();
 			}
 		}
 
 		bHasProcessedMessages = false;
-		bHasProcessedMessages |= ProcessRPCUpdates(Spy.Updates, RPCService);
-		bHasProcessedMessages |= ExtractUpdatesFromRPCService(*Stub, RPCService);
-		TestFixture.Step();
+		bHasProcessedMessages |= TestFixture.ExtractUpdatesFromRPCStore(RPCService, RPCStore);
+		bHasProcessedMessages |= TestFixture.StepRoutingWorker();
 	}
 
 	TestTrue(TEXT("All RPCs sent and accounted for"), ExpectedRPCs.Num() == 0);
 	for (auto Entity : Entities)
 	{
-		Components Comps(Entity, Spy.ComponentView);
+		Components Comps(Entity, TestFixture.CoordinatorServerWorker.GetView());
 		TestTrue(TEXT("Settled"), Comps.CheckSettled());
 	}
 
 	return true;
 }
 
-ROUTING_SERVICE_TEST(TestRouting_Delete)
+ROUTING_SERVICE_TEST(TestRoutingWorker_BlackBox_SendOneMessageBetweenDeletedEntities)
 {
-	const uint32 Delays = 8;
+	const uint32 Delays = 4;
 
 	TArray<Worker_EntityId> Entities;
 	for (uint32 i = 0; i < 4 * Delays * 2; ++i)
@@ -596,103 +683,75 @@ ROUTING_SERVICE_TEST(TestRouting_Delete)
 		Entities.Add((i + 1) * 10);
 	}
 
-	TArray<TArray<OpList>> ListsOfOpLists;
-	{
-		TArray<OpList> OpLists;
-		EntityComponentOpListBuilder Builder;
-		for (auto Entity : Entities)
-		{
-			AddEntityAndCrossServerComponents(Builder, Entity);
-		}
-		OpLists.Add(MoveTemp(Builder).CreateOpList());
-		ListsOfOpLists.Add(MoveTemp(OpLists));
-	}
-
 	TestRoutingFixture TestFixture;
+	TestFixture.Init(Entities);
 
-	SpatialOSWorkerConnectionSpy& Spy = TestFixture.Spy;
-	ConnectionHandlerStub* Stub = TestFixture.Stub;
-	Stub->SetListsOfOpLists(MoveTemp(ListsOfOpLists));
-	TestFixture.Step();
-
-	for (auto Entity : Entities)
-	{
-		AddEntityAndCrossServerComponents(*Spy.ComponentView, Entity);
-	}
-
-	SpatialGDK::SpatialRPCService* RPCServiceBackptr = nullptr;
+	SpatialGDK::CrossServerRPCService* RPCServiceBackptr = nullptr;
 
 	TSet<TPair<Worker_EntityId, uint32>> ExpectedRPCs;
 
-	auto ExtractRPCCallback = [this, &ExpectedRPCs, &RPCServiceBackptr](Worker_EntityId Target, const FUnrealObjectRef& SenderRef,
-																		ERPCType Type, const SpatialGDK::RPCPayload& Payload,
-																		uint64 SenderRev) {
-		RPCServiceBackptr->WriteCrossServerACKFor(Target, SenderRef.Entity, SenderRef.Offset, SenderRev, Type);
-		return true;
+	auto ExtractRPCCallback = [this, &ExpectedRPCs, &RPCServiceBackptr](const FUnrealObjectRef& Target, const RPCSender& Sender,
+																		SpatialGDK::RPCPayload Payload) {
+		RPCServiceBackptr->WriteCrossServerACKFor(Target.Entity, Sender);
 	};
 
-	SpatialGDK::SpatialRPCService RPCService(ExtractRPCDelegate::CreateLambda(ExtractRPCCallback), Spy.ComponentView, nullptr);
-	RPCServiceBackptr = &RPCService;
-	for (auto Entity : Entities)
-	{
-		RPCService.OnEndpointAuthorityGained(Entity, SpatialConstants::CROSSSERVER_SENDER_ENDPOINT_COMPONENT_ID);
-		RPCService.OnEndpointAuthorityGained(Entity, SpatialConstants::CROSSSERVER_RECEIVER_ACK_ENDPOINT_COMPONENT_ID);
-	}
+	SpatialGDK::FRPCStore RPCStore;
+	SpatialGDK::CrossServerRPCService RPCService(ExtractRPCDelegate::CreateLambda(ExtractRPCCallback), TestFixture.ServerWorkerSubView,
+												 RPCStore);
 
-	for (uint32 Attempt = 0; Attempt < 4; ++Attempt)
+	RPCServiceBackptr = &RPCService;
+	RPCService.AdvanceView();
+	RPCService.ProcessChanges();
+
+	for (uint32 Attempt = 0; Attempt < 2; ++Attempt)
 		for (uint32 CurDelay = 0; CurDelay < Delays; ++CurDelay)
 		{
 			Worker_EntityId Sender = Entities[2 * (Attempt * Delays + CurDelay) + 0];
 			Worker_EntityId Receiver = Entities[2 * (Attempt * Delays + CurDelay) + 1];
 
-			Worker_EntityId ToRemove = (Attempt / 2) == 0 ? Sender : Receiver;
-			Worker_EntityId ToCheck = (Attempt / 2) == 1 ? Sender : Receiver;
+			Worker_EntityId ToRemove = (Attempt % 2) == 0 ? Sender : Receiver;
+			Worker_EntityId ToCheck = (Attempt % 2) == 1 ? Sender : Receiver;
 
 			RPCPayload DummyPayload(0, 0, TArray<uint8>());
-			RPCService.PushRPC(Sender, FUnrealObjectRef(Receiver, 0), ERPCType::CrossServerSender, DummyPayload, false);
+			RPCService.PushCrossServerRPC(Receiver, RPCSender(Sender, 0), DummyPayload, false);
 
 			uint32 Delay = 0;
 			bool bHasProcessedMessages = true;
 			while (bHasProcessedMessages)
 			{
+				bHasProcessedMessages = false;
 				auto PerformDeletion = [&] {
-					RPCService.OnEndpointAuthorityLost(ToRemove, SpatialConstants::CROSSSERVER_SENDER_ENDPOINT_COMPONENT_ID);
-					RPCService.OnEndpointAuthorityLost(ToRemove, SpatialConstants::CROSSSERVER_RECEIVER_ACK_ENDPOINT_COMPONENT_ID);
-					RemoveEntityAndCrossServerComponents(Spy, ToRemove);
-
-					TArray<OpList> OpLists;
 					EntityComponentOpListBuilder Builder;
-					RemoveEntityAndCrossServerComponents(Builder, ToRemove);
-					OpLists.Add(MoveTemp(Builder).CreateOpList());
-					ListsOfOpLists.Add(MoveTemp(OpLists));
-					Stub->SetListsOfOpLists(MoveTemp(ListsOfOpLists));
-					TestFixture.Step();
+					RemoveEntityAndCrossServerComponents(TestFixture.CoordinatorServerWorker, Builder, ToRemove);
+					TestFixture.ServerWorkerStub->SetFromBuilder(Builder);
+					TestFixture.CoordinatorServerWorker.Advance(0.0);
+					RPCService.AdvanceView();
+					RPCService.ProcessChanges();
+
+					RemoveEntityAndCrossServerComponents(TestFixture.CoordinatorRoutingWorker, Builder, ToRemove);
+					TestFixture.RoutingWorkerStub->SetFromBuilder(Builder);
+					bHasProcessedMessages |= TestFixture.StepRoutingWorker();
 				};
 
-				if (Delay == CurDelay && Attempt % 2 == 0)
+				if (Delay == CurDelay)
 				{
 					PerformDeletion();
 				}
 
-				bHasProcessedMessages = false;
-				bHasProcessedMessages |= ProcessRPCUpdates(Spy.Updates, RPCService);
+				bHasProcessedMessages |= TestFixture.ExtractUpdatesFromRPCStore(RPCService, RPCStore);
+				bHasProcessedMessages |= TestFixture.StepRoutingWorker();
 
-				if (Delay == CurDelay && Attempt % 2 == 1)
-				{
-					PerformDeletion();
-				}
-
-				bHasProcessedMessages |= ExtractUpdatesFromRPCService(*Stub, RPCService);
-				bHasProcessedMessages |= TestFixture.Step();
+				RPCService.AdvanceView();
+				RPCService.ProcessChanges();
 
 				++Delay;
 			}
 
-			Components Comps(ToCheck, Spy.ComponentView);
+			Components Comps(ToCheck, TestFixture.CoordinatorServerWorker.GetView());
 			bool Settled = Comps.CheckSettled();
 			if (!Settled)
 			{
-				FString Debug = FString::Printf(TEXT("Attempt %i for delay %i is not settled"), Attempt, Delay);
+				FString Debug = FString::Printf(TEXT("Attempt %i for delay %i is not settled"), Attempt, CurDelay);
 				TestTrue(Debug, Settled);
 			}
 		}
@@ -700,7 +759,7 @@ ROUTING_SERVICE_TEST(TestRouting_Delete)
 	return true;
 }
 
-ROUTING_SERVICE_TEST(TestRouting_Capacity)
+ROUTING_SERVICE_TEST(TestRoutingWorker_BlackBox_SendMoreMessagesThanRingBufferCapacityBetweenSeveralEntities)
 {
 	TArray<Worker_EntityId> Entities;
 	for (uint32 i = 0; i < 4; ++i)
@@ -708,51 +767,26 @@ ROUTING_SERVICE_TEST(TestRouting_Capacity)
 		Entities.Add((i + 1) * 10);
 	}
 
-	TArray<TArray<OpList>> ListsOfOpLists;
-	{
-		TArray<OpList> OpLists;
-		EntityComponentOpListBuilder Builder;
-		for (auto Entity : Entities)
-		{
-			AddEntityAndCrossServerComponents(Builder, Entity);
-		}
-		OpLists.Add(MoveTemp(Builder).CreateOpList());
-		ListsOfOpLists.Add(MoveTemp(OpLists));
-	}
-
 	TestRoutingFixture TestFixture;
+	TestFixture.Init(Entities);
 
-	SpatialOSWorkerConnectionSpy& Spy = TestFixture.Spy;
-	ConnectionHandlerStub* Stub = TestFixture.Stub;
-	Stub->SetListsOfOpLists(MoveTemp(ListsOfOpLists));
-	TestFixture.Step();
-
-	for (auto Entity : Entities)
-	{
-		AddEntityAndCrossServerComponents(*Spy.ComponentView, Entity);
-	}
-
-	SpatialGDK::SpatialRPCService* RPCServiceBackptr = nullptr;
+	SpatialGDK::CrossServerRPCService* RPCServiceBackptr = nullptr;
 
 	TSet<TPair<Worker_EntityId, uint32>> ExpectedRPCs;
 
-	auto ExtractRPCCallback = [this, &ExpectedRPCs, &RPCServiceBackptr](Worker_EntityId Target, const FUnrealObjectRef& SenderRef,
-																		ERPCType Type, const SpatialGDK::RPCPayload& Payload,
-																		uint64 SenderRev) {
-		int32 NumRemoved = ExpectedRPCs.Remove(MakeTuple(Target, Payload.Index));
-		FString DebugText = FString::Printf(TEXT("RPC %i from %llu to %llu was unexpected"), Payload.Index, SenderRef.Entity, Target);
+	auto ExtractRPCCallback = [this, &ExpectedRPCs, &RPCServiceBackptr](const FUnrealObjectRef& Target, const RPCSender& Sender,
+																		SpatialGDK::RPCPayload Payload) {
+		int32 NumRemoved = ExpectedRPCs.Remove(MakeTuple(Target.Entity, Payload.Index));
+		FString DebugText = FString::Printf(TEXT("RPC %i from %llu to %llu was unexpected"), Payload.Index, Sender.Entity, Target.Entity);
 		TestTrue(*DebugText, NumRemoved > 0);
-		RPCServiceBackptr->WriteCrossServerACKFor(Target, SenderRef.Entity, SenderRef.Offset, SenderRev, Type);
-		return true;
+		RPCServiceBackptr->WriteCrossServerACKFor(Target.Entity, Sender);
 	};
 
-	SpatialGDK::SpatialRPCService RPCService(ExtractRPCDelegate::CreateLambda(ExtractRPCCallback), Spy.ComponentView, nullptr);
+	SpatialGDK::FRPCStore RPCStore;
+	SpatialGDK::CrossServerRPCService RPCService(ExtractRPCDelegate::CreateLambda(ExtractRPCCallback), TestFixture.ServerWorkerSubView,
+												 RPCStore);
+
 	RPCServiceBackptr = &RPCService;
-	for (auto Entity : Entities)
-	{
-		RPCService.OnEndpointAuthorityGained(Entity, SpatialConstants::CROSSSERVER_SENDER_ENDPOINT_COMPONENT_ID);
-		RPCService.OnEndpointAuthorityGained(Entity, SpatialConstants::CROSSSERVER_RECEIVER_ACK_ENDPOINT_COMPONENT_ID);
-	}
 
 	uint32 MaxCapacity = SpatialGDK::RPCRingBufferUtils::GetRingBufferSize(ERPCType::CrossServerSender);
 
@@ -762,12 +796,13 @@ ROUTING_SERVICE_TEST(TestRouting_Capacity)
 		TargetIdx.Add((idx + 1) % 4);
 	}
 
-	// Should take 2 steps to fan out and receive updates.
+	// Should take 2 steps to fan out, receive updates and free slots.
 	uint32 RPCPerStep = MaxCapacity / 2;
 	uint32 RPCAlloc = 0;
 	for (uint32 BatchNum = 0; BatchNum < 16; ++BatchNum)
 	{
-		ProcessRPCUpdates(Spy.Updates, RPCService);
+		RPCService.AdvanceView();
+		RPCService.ProcessChanges();
 
 		for (uint32 i = 0; i < 4; ++i)
 		{
@@ -778,8 +813,7 @@ ROUTING_SERVICE_TEST(TestRouting_Capacity)
 				RPCPayload DummyPayload(0, RPCAlloc, TArray<uint8>());
 				ExpectedRPCs.Add(MakeTuple(Receiver, RPCAlloc));
 				++RPCAlloc;
-				SpatialGDK::EPushRPCResult Result =
-					RPCService.PushRPC(Sender, FUnrealObjectRef(Receiver, 0), ERPCType::CrossServerSender, DummyPayload, false);
+				SpatialGDK::EPushRPCResult Result = RPCService.PushCrossServerRPC(Receiver, RPCSender(Sender, 0), DummyPayload, false);
 				TestTrue(TEXT("Did not run out of capacity"), Result == EPushRPCResult::Success);
 				do
 				{
@@ -788,27 +822,21 @@ ROUTING_SERVICE_TEST(TestRouting_Capacity)
 				} while (Receiver == Sender);
 			}
 		}
-		ExtractUpdatesFromRPCService(*Stub, RPCService);
-		TestFixture.Step();
+		TestFixture.ExtractUpdatesFromRPCStore(RPCService, RPCStore);
+		TestFixture.StepRoutingWorker();
 	}
 	bool bHasProcessedMessages = true;
 	while (bHasProcessedMessages)
 	{
 		bHasProcessedMessages = false;
-		bHasProcessedMessages |= ProcessRPCUpdates(Spy.Updates, RPCService);
-		bHasProcessedMessages |= ExtractUpdatesFromRPCService(*Stub, RPCService);
-		bHasProcessedMessages |= TestFixture.Step();
+		RPCService.AdvanceView();
+		RPCService.ProcessChanges();
+		bHasProcessedMessages |= TestFixture.ExtractUpdatesFromRPCStore(RPCService, RPCStore);
+		bHasProcessedMessages |= TestFixture.StepRoutingWorker();
 	}
 	TestTrue(TEXT("All RPC were received"), ExpectedRPCs.Num() == 0);
 
 	return true;
 }
 
-ROUTING_SERVICE_TEST(TestRouting_Migration)
-{
-	return true;
-}
-
 } // namespace SpatialGDK
-
-#endif

@@ -59,6 +59,10 @@ struct RPCTarget : CrossServerRPCInfo
 struct RPCSender : CrossServerRPCInfo
 {
 	RPCSender() = default;
+	RPCSender(Worker_EntityId Sender, uint64 RPCId)
+		: CrossServerRPCInfo(Sender, RPCId)
+	{
+	}
 	explicit RPCSender(const CrossServerRPCInfo& iInfo)
 		: CrossServerRPCInfo(iInfo)
 	{

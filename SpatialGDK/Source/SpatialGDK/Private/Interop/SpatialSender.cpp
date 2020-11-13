@@ -254,29 +254,28 @@ void USpatialSender::RetryServerWorkerEntityCreation(Worker_EntityId EntityId, i
 {
 	const USpatialGDKSettings* Settings = GetDefault<USpatialGDKSettings>();
 
-	const WorkerRequirementSet WorkerIdPermission{ { FString::Format(TEXT("workerId:{0}"), { Connection->GetWorkerId() }) },
-												   SpatialConstants::UnrealRoutingWorkerAttributeSet };
+	const WorkerRequirementSet WorkerIdAuthority{ { FString::Format(TEXT("workerId:{0}"), { Connection->GetWorkerId() }) } };
+	const WorkerRequirementSet WorkerPermission{ { FString::Format(TEXT("workerId:{0}"), { Connection->GetWorkerId() }) },
+												 SpatialConstants::UnrealRoutingWorkerAttributeSet };
 
 	WriteAclMap ComponentWriteAcl;
-	ComponentWriteAcl.Add(SpatialConstants::POSITION_COMPONENT_ID, WorkerIdPermission);
-	ComponentWriteAcl.Add(SpatialConstants::METADATA_COMPONENT_ID, WorkerIdPermission);
-	ComponentWriteAcl.Add(SpatialConstants::ENTITY_ACL_COMPONENT_ID, WorkerIdPermission);
-	ComponentWriteAcl.Add(SpatialConstants::INTEREST_COMPONENT_ID, WorkerIdPermission);
-	ComponentWriteAcl.Add(SpatialConstants::SERVER_WORKER_COMPONENT_ID, WorkerIdPermission);
-	ComponentWriteAcl.Add(SpatialConstants::COMPONENT_PRESENCE_COMPONENT_ID, WorkerIdPermission);
+	ComponentWriteAcl.Add(SpatialConstants::POSITION_COMPONENT_ID, WorkerIdAuthority);
+	ComponentWriteAcl.Add(SpatialConstants::METADATA_COMPONENT_ID, WorkerIdAuthority);
+	ComponentWriteAcl.Add(SpatialConstants::ENTITY_ACL_COMPONENT_ID, WorkerIdAuthority);
+	ComponentWriteAcl.Add(SpatialConstants::INTEREST_COMPONENT_ID, WorkerIdAuthority);
+	ComponentWriteAcl.Add(SpatialConstants::SERVER_WORKER_COMPONENT_ID, WorkerIdAuthority);
+	ComponentWriteAcl.Add(SpatialConstants::COMPONENT_PRESENCE_COMPONENT_ID, WorkerIdAuthority);
 	if (Settings->CrossServerRPCImplementation == ECrossServerRPCImplementation::RoutingWorker)
 	{
-		FString RoutingWorkerName = NetDriver->GetRoutingWorkerId();
-		const WorkerRequirementSet RoutingWorkerRequirementSet = { { FString::Format(TEXT("workerId:{0}"), { *RoutingWorkerName }) } };
-
-		ComponentWriteAcl.Add(SpatialConstants::CROSSSERVER_SENDER_ENDPOINT_COMPONENT_ID, WorkerIdPermission);
-		ComponentWriteAcl.Add(SpatialConstants::CROSSSERVER_SENDER_ACK_ENDPOINT_COMPONENT_ID, RoutingWorkerRequirementSet);
+		ComponentWriteAcl.Add(SpatialConstants::CROSSSERVER_SENDER_ENDPOINT_COMPONENT_ID, WorkerIdAuthority);
+		ComponentWriteAcl.Add(SpatialConstants::CROSSSERVER_SENDER_ACK_ENDPOINT_COMPONENT_ID,
+							  { SpatialConstants::UnrealRoutingWorkerAttributeSet });
 	}
 
 	TArray<FWorkerComponentData> Components;
 	Components.Add(Position().CreatePositionData());
 	Components.Add(Metadata(FString::Format(TEXT("WorkerEntity:{0}"), { Connection->GetWorkerId() })).CreateMetadataData());
-	Components.Add(EntityAcl(WorkerIdPermission, ComponentWriteAcl).CreateEntityAclData());
+	Components.Add(EntityAcl(WorkerPermission, ComponentWriteAcl).CreateEntityAclData());
 	Components.Add(ServerWorker(Connection->GetWorkerId(), false).CreateServerWorkerData());
 	if (Settings->CrossServerRPCImplementation == ECrossServerRPCImplementation::RoutingWorker)
 	{
@@ -435,23 +434,23 @@ void USpatialSender::UpdateServerWorkerVisibility()
 	}
 
 	const USpatialGDKSettings* Settings = GetDefault<USpatialGDKSettings>();
-	const WorkerRequirementSet WorkerIdPermission{ { FString::Format(TEXT("workerId:{0}"), { Connection->GetWorkerId() }) } };
+	const WorkerRequirementSet WorkerIdAuthority{ { FString::Format(TEXT("workerId:{0}"), { Connection->GetWorkerId() }) } };
 
 	WriteAclMap ComponentWriteAcl;
-	ComponentWriteAcl.Add(SpatialConstants::POSITION_COMPONENT_ID, WorkerIdPermission);
-	ComponentWriteAcl.Add(SpatialConstants::METADATA_COMPONENT_ID, WorkerIdPermission);
-	ComponentWriteAcl.Add(SpatialConstants::ENTITY_ACL_COMPONENT_ID, WorkerIdPermission);
-	ComponentWriteAcl.Add(SpatialConstants::INTEREST_COMPONENT_ID, WorkerIdPermission);
-	ComponentWriteAcl.Add(SpatialConstants::SERVER_WORKER_COMPONENT_ID, WorkerIdPermission);
-	ComponentWriteAcl.Add(SpatialConstants::COMPONENT_PRESENCE_COMPONENT_ID, WorkerIdPermission);
+	ComponentWriteAcl.Add(SpatialConstants::POSITION_COMPONENT_ID, WorkerIdAuthority);
+	ComponentWriteAcl.Add(SpatialConstants::METADATA_COMPONENT_ID, WorkerIdAuthority);
+	ComponentWriteAcl.Add(SpatialConstants::ENTITY_ACL_COMPONENT_ID, WorkerIdAuthority);
+	ComponentWriteAcl.Add(SpatialConstants::INTEREST_COMPONENT_ID, WorkerIdAuthority);
+	ComponentWriteAcl.Add(SpatialConstants::SERVER_WORKER_COMPONENT_ID, WorkerIdAuthority);
+	ComponentWriteAcl.Add(SpatialConstants::COMPONENT_PRESENCE_COMPONENT_ID, WorkerIdAuthority);
 	if (Settings->CrossServerRPCImplementation == ECrossServerRPCImplementation::RoutingWorker)
 	{
-		FString RoutingWorkerName = NetDriver->GetRoutingWorkerId();
-		const WorkerRequirementSet RoutingWorkerRequirementSet = { { FString::Format(TEXT("workerId:{0}"), { *RoutingWorkerName }) } };
-		ComponentWriteAcl.Add(SpatialConstants::CROSSSERVER_SENDER_ENDPOINT_COMPONENT_ID, WorkerIdPermission);
-		ComponentWriteAcl.Add(SpatialConstants::CROSSSERVER_SENDER_ACK_ENDPOINT_COMPONENT_ID, RoutingWorkerRequirementSet);
+		ComponentWriteAcl.Add(SpatialConstants::CROSSSERVER_SENDER_ENDPOINT_COMPONENT_ID, WorkerIdAuthority);
+		ComponentWriteAcl.Add(SpatialConstants::CROSSSERVER_SENDER_ACK_ENDPOINT_COMPONENT_ID,
+							  { SpatialConstants::UnrealRoutingWorkerAttributeSet });
 	}
-	WorkerRequirementSet AnyServerRequirementSet = { SpatialConstants::UnrealServerAttributeSet };
+	WorkerRequirementSet AnyServerRequirementSet = { SpatialConstants::UnrealServerAttributeSet,
+													 SpatialConstants::UnrealRoutingWorkerAttributeSet };
 
 	SpatialGDK::EntityAcl EntityACL(
 		AnyServerRequirementSet,

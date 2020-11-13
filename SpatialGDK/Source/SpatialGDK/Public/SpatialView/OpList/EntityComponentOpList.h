@@ -1,4 +1,4 @@
-﻿// Copyright (c) Improbable Worlds Ltd, All Rights Reserved
+// Copyright (c) Improbable Worlds Ltd, All Rights Reserved
 
 #pragma once
 
@@ -32,6 +32,9 @@ class EntityComponentOpListBuilder
 {
 public:
 	EntityComponentOpListBuilder();
+
+	// MoveTemp leaves the builder in an undefined state. This op allows the current builder to be reused.
+	EntityComponentOpListBuilder Move();
 
 	EntityComponentOpListBuilder& AddEntity(Worker_EntityId EntityId);
 	EntityComponentOpListBuilder& RemoveEntity(Worker_EntityId EntityId);
